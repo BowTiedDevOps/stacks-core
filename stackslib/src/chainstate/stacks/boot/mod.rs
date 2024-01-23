@@ -1188,6 +1188,7 @@ pub mod test {
     use crate::core::{StacksEpochId, *};
     use crate::net::test::*;
     use crate::util_lib::boot::{boot_code_id, boot_code_test_addr};
+    use crate::util_lib::signed_structured_data::sign_structured_data;
 
     pub const TESTNET_STACKING_THRESHOLD_25: u128 = 8000;
 
@@ -1798,7 +1799,6 @@ pub mod test {
         delegate_to: PrincipalData,
         until_burn_ht: Option<u128>,
         pox_addr: Option<PoxAddress>,
-        delegator_signature: &Vec<u8>,
     ) -> StacksTransaction {
         let payload = TransactionPayload::new_contract_call(
             boot_code_test_addr(),
@@ -1817,7 +1817,6 @@ pub mod test {
                     }
                     None => Value::none(),
                 },
-                Value::buff_from(delegator_signature.clone()).unwrap(),
             ],
         )
         .unwrap();
@@ -1833,6 +1832,7 @@ pub mod test {
         pox_addr: PoxAddress,
         start_burn_height: u128,
         lock_period: u128,
+        signature: Vec<u8>,
         signer_key: StacksPublicKey,
     ) -> StacksTransaction {
         let payload: TransactionPayload = TransactionPayload::new_contract_call(
@@ -1845,6 +1845,7 @@ pub mod test {
                 Value::Tuple(pox_addr.as_clarity_tuple().unwrap()),
                 Value::UInt(start_burn_height),
                 Value::UInt(lock_period),
+                Value::buff_from(signature).unwrap(),
                 Value::buff_from(signer_key.to_bytes_compressed()).unwrap(),
             ],
         )
@@ -1868,8 +1869,8 @@ pub mod test {
             vec![
                 Value::Principal(stacker.clone()),
                 Value::Tuple(pox_addr.as_clarity_tuple().unwrap()),
-                Value::UInt(extend_count),
                 Value::buff_from(signer_key.to_bytes_compressed()).unwrap(),
+                Value::UInt(extend_count),
             ],
         )
         .unwrap();
@@ -1945,6 +1946,39 @@ pub mod test {
         .unwrap();
 
         make_tx(key, nonce, 0, payload)
+    }
+
+    pub fn make_signer_key_signature(
+        stacker: &PrincipalData,
+        signer_key: &StacksPrivateKey,
+        reward_cycle: u128,
+    ) -> Vec<u8> {
+        let domain_tuple = Value::Tuple(
+            TupleData::from_data(vec![
+                (
+                    "name".into(),
+                    Value::string_ascii_from_bytes("pox-4-signer".into()).unwrap(),
+                ),
+                (
+                    "version".into(),
+                    Value::string_ascii_from_bytes("1.0.0".into()).unwrap(),
+                ),
+                ("chain-id".into(), Value::UInt(CHAIN_ID_TESTNET.into())),
+            ])
+            .unwrap(),
+        );
+
+        let data_tuple = Value::Tuple(
+            TupleData::from_data(vec![
+                ("stacker".into(), Value::Principal(stacker.clone())),
+                ("reward-cycle".into(), Value::UInt(reward_cycle)),
+            ])
+            .unwrap(),
+        );
+
+        let signature = sign_structured_data(data_tuple, domain_tuple, signer_key).unwrap();
+
+        signature.to_rsv()
     }
 
     pub fn make_delegate_stx_signature(
