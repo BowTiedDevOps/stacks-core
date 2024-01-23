@@ -39,7 +39,7 @@ use stacks_common::address::AddressHashMode;
 use stacks_common::types::chainstate::{
     BlockHeaderHash, BurnchainHeaderHash, StacksAddress, StacksBlockId, VRFSeed,
 };
-use stacks_common::types::Address;
+use stacks_common::types::{Address, PrivateKey};
 use stacks_common::util::hash::{hex_bytes, to_hex, Sha256Sum, Sha512Trunc256Sum};
 use stacks_common::util::secp256k1::Secp256k1PrivateKey;
 use wsts::curve::point::{Compressed, Point};
@@ -1235,6 +1235,9 @@ fn pox_4_revoke_delegate_stx_events() {
 
     // alice delegates 100 STX to Bob
     let alice_delegation_amount = 100_000_000;
+    let cur_reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+    let signature = make_delegate_stx_signature(&alice_principal, &bob, cur_reward_cycle);
+    let alice_delegate_nonce = alice_nonce;
     let alice_delegate = make_pox_4_delegate_stx(
         &alice,
         alice_nonce,
@@ -1242,6 +1245,7 @@ fn pox_4_revoke_delegate_stx_events() {
         bob_principal,
         None,
         None,
+        &signature,
     );
     let alice_delegate_nonce = alice_nonce;
     alice_nonce += 1;
@@ -1269,6 +1273,7 @@ fn pox_4_revoke_delegate_stx_events() {
         PrincipalData::from(bob_address.clone()),
         Some(target_height as u128),
         None,
+        &signature,
     );
     let alice_delegate_2_nonce = alice_nonce;
     alice_nonce += 1;
@@ -1300,6 +1305,12 @@ fn pox_4_revoke_delegate_stx_events() {
         }
     }
     assert_eq!(alice_txs.len() as u64, 5);
+
+    let first_delegate_tx = &alice_txs.get(&alice_delegate_nonce);
+    assert_eq!(
+        first_delegate_tx.unwrap().clone().result,
+        Value::okay_true()
+    );
 
     // check event for first revoke delegation tx
     let revoke_delegation_tx_events = &alice_txs.get(&alice_revoke_nonce).unwrap().clone().events;
@@ -1338,6 +1349,159 @@ fn pox_4_revoke_delegate_stx_events() {
         &alice_txs[&alice_revoke_3_nonce].result.to_string(),
         "(err 34)"
     );
+}
+
+#[test]
+fn delegate_stx_signature_validation() {
+    let (epochs, pox_constants) = make_test_epochs_pox();
+
+    let mut burnchain = Burnchain::default_unittest(
+        0,
+        &BurnchainHeaderHash::from_hex(BITCOIN_REGTEST_FIRST_BLOCK_HASH).unwrap(),
+    );
+    burnchain.pox_constants = pox_constants.clone();
+
+    let observer = TestEventObserver::new();
+
+    let (mut peer, mut keys) = instantiate_pox_peer_with_epoch(
+        &burnchain,
+        function_name!(),
+        Some(epochs.clone()),
+        Some(&observer),
+    );
+
+    assert_eq!(burnchain.pox_constants.reward_slots(), 6);
+    let mut coinbase_nonce = 0;
+    let mut latest_block;
+
+    // alice
+    let alice = keys.pop().unwrap();
+    let alice_address = key_to_stacks_addr(&alice);
+    let alice_principal = PrincipalData::from(alice_address.clone());
+
+    // bob
+    let bob = keys.pop().unwrap();
+    let bob_address = key_to_stacks_addr(&bob);
+    let bob_principal = PrincipalData::from(bob_address.clone());
+    let bob_pox_addr = make_pox_addr(AddressHashMode::SerializeP2PKH, bob_address.bytes.clone());
+
+    let mut alice_nonce = 0;
+
+    // Advance into pox4
+    let target_height = burnchain.pox_constants.pox_4_activation_height;
+    // produce blocks until the first reward phase that everyone should be in
+    while get_tip(peer.sortdb.as_ref()).block_height < u64::from(target_height) {
+        latest_block = peer.tenure_with_txs(&[], &mut coinbase_nonce);
+    }
+
+    info!(
+        "Block height: {}",
+        get_tip(peer.sortdb.as_ref()).block_height
+    );
+
+    // alice delegates 100 STX to Bob
+    let alice_delegation_amount = 100_000_000;
+    let cur_reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+
+    // Test 1: invalid block-height used in signature
+
+    let last_reward_cycle = cur_reward_cycle - 1;
+    let signature = make_delegate_stx_signature(&alice_principal, &bob, last_reward_cycle);
+    let invalid_cycle_nonce = alice_nonce;
+    let invalid_cycle_delegate = make_pox_4_delegate_stx(
+        &alice,
+        alice_nonce,
+        alice_delegation_amount,
+        bob_principal.clone(),
+        None,
+        None,
+        &signature,
+    );
+
+    alice_nonce += 1;
+
+    // Test 2: invalid sender used in signature
+
+    let signature = make_delegate_stx_signature(&bob_principal, &bob, cur_reward_cycle);
+    let invalid_sender_nonce = alice_nonce;
+    let invalid_sender_delegate = make_pox_4_delegate_stx(
+        &alice,
+        alice_nonce,
+        alice_delegation_amount,
+        bob_principal.clone(),
+        None,
+        None,
+        &signature,
+    );
+
+    alice_nonce += 1;
+
+    // Test 3: signature not from delegator's key
+
+    let signature = make_delegate_stx_signature(&alice_principal, &alice, cur_reward_cycle);
+    let invalid_signer_nonce = alice_nonce;
+    let invalid_signer_delegate = make_pox_4_delegate_stx(
+        &alice,
+        alice_nonce,
+        alice_delegation_amount,
+        bob_principal.clone(),
+        None,
+        None,
+        &signature,
+    );
+
+    alice_nonce += 1;
+
+    // Finally, test with valid signature
+    let signature = make_delegate_stx_signature(&alice_principal, &bob, cur_reward_cycle);
+    let valid_delegate_nonce = alice_nonce;
+    let valid_delegate = make_pox_4_delegate_stx(
+        &alice,
+        alice_nonce,
+        alice_delegation_amount,
+        bob_principal,
+        None,
+        None,
+        &signature,
+    );
+
+    peer.tenure_with_txs(
+        &[
+            invalid_cycle_delegate,
+            invalid_sender_delegate,
+            invalid_signer_delegate,
+            valid_delegate,
+        ],
+        &mut coinbase_nonce,
+    );
+
+    let blocks = observer.get_blocks();
+    let mut alice_txs = HashMap::new();
+
+    for b in blocks.into_iter() {
+        for r in b.receipts.into_iter() {
+            if let TransactionOrigin::Stacks(ref t) = r.transaction {
+                let addr = t.auth.origin().address_testnet();
+                if addr == alice_address {
+                    alice_txs.insert(t.auth.get_origin_nonce(), r);
+                }
+            }
+        }
+    }
+
+    let expected_error = Value::error(Value::Int(35)).unwrap();
+
+    let invalid_sender_tx = &alice_txs.get(&invalid_sender_nonce).unwrap().clone();
+    assert_eq!(invalid_sender_tx.result, expected_error);
+
+    let invalid_cycle_tx = &alice_txs.get(&invalid_cycle_nonce).unwrap().clone();
+    assert_eq!(invalid_cycle_tx.result, expected_error);
+
+    let invalid_signer_tx = &alice_txs.get(&invalid_signer_nonce).unwrap().clone();
+    assert_eq!(invalid_signer_tx.result, expected_error);
+
+    let valid_delegate_tx = &alice_txs.get(&valid_delegate_nonce).unwrap().clone();
+    assert_eq!(valid_delegate_tx.result, Value::okay_true());
 }
 
 fn assert_latest_was_burn(peer: &mut TestPeer) {
@@ -1626,6 +1790,7 @@ fn delegate_stack_stx_signer_key() {
 
     let stacker_nonce = 0;
     let stacker_key = &keys[0];
+    let stacker_principal = PrincipalData::from(key_to_stacks_addr(stacker_key));
     let delegate_nonce = 0;
     let delegate_key = &keys[1];
     let delegate_principal = PrincipalData::from(key_to_stacks_addr(delegate_key));

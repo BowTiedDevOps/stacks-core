@@ -1167,7 +1167,9 @@ pub mod test {
 
     use clarity::vm::contracts::Contract;
     use clarity::vm::types::*;
-    use stacks_common::util::hash::to_hex;
+    use stacks_common::types::PrivateKey;
+    use stacks_common::util::hash::Sha256Sum;
+    use stacks_common::util::secp256k1::Secp256k1PrivateKey;
     use stacks_common::util::*;
 
     use super::*;
@@ -1796,6 +1798,7 @@ pub mod test {
         delegate_to: PrincipalData,
         until_burn_ht: Option<u128>,
         pox_addr: Option<PoxAddress>,
+        delegator_signature: &Vec<u8>,
     ) -> StacksTransaction {
         let payload = TransactionPayload::new_contract_call(
             boot_code_test_addr(),
@@ -1814,6 +1817,7 @@ pub mod test {
                     }
                     None => Value::none(),
                 },
+                Value::buff_from(delegator_signature.clone()).unwrap(),
             ],
         )
         .unwrap();
@@ -1941,6 +1945,37 @@ pub mod test {
         .unwrap();
 
         make_tx(key, nonce, 0, payload)
+    }
+
+    pub fn make_delegate_stx_signature(
+        stacker: &PrincipalData,
+        delegator_key: &Secp256k1PrivateKey,
+        reward_cycle: u128,
+    ) -> Vec<u8> {
+        let msg_tuple = Value::Tuple(
+            TupleData::from_data(vec![
+                ("stacker".into(), Value::Principal(stacker.clone())),
+                ("reward-cycle".into(), Value::UInt(reward_cycle)),
+            ])
+            .unwrap(),
+        );
+
+        let mut tuple_bytes = vec![];
+        msg_tuple
+            .serialize_write(&mut tuple_bytes)
+            .expect("Failed to serialize delegate sig data");
+        let msg_hash = Sha256Sum::from_data(&tuple_bytes).as_bytes().to_vec();
+
+        let signature = &delegator_key
+            .sign(&msg_hash)
+            .expect("Unable to sign delegate sig data");
+
+        // Convert signature into rsv as needed for `secp256k1-recover?`
+        let mut ret_bytes = Vec::new();
+        ret_bytes.extend(&signature[1..]);
+        ret_bytes.push(signature[0]);
+
+        ret_bytes
     }
 
     fn make_tx(
@@ -2263,6 +2298,14 @@ pub mod test {
             }
         };
         parent_tip
+    }
+
+    pub fn get_current_reward_cycle(peer: &TestPeer, burnchain: &Burnchain) -> u128 {
+        let tip = SortitionDB::get_canonical_burn_chain_tip(&peer.sortdb.as_ref().unwrap().conn())
+            .unwrap();
+        burnchain
+            .block_height_to_reward_cycle(tip.block_height)
+            .unwrap() as u128
     }
 
     #[test]
