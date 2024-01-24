@@ -12,11 +12,9 @@ use stacks::chainstate::stacks::boot::MINERS_NAME;
 use stacks::chainstate::stacks::{StacksPrivateKey, ThresholdSignature};
 use stacks::net::api::postblock_proposal::BlockValidateResponse;
 use stacks::util_lib::boot::boot_code_id;
-use stacks_common::types::chainstate::{
-    ConsensusHash, StacksAddress, StacksBlockId, StacksPublicKey, TrieHash,
-};
+use stacks_common::types::chainstate::{ConsensusHash, StacksAddress, StacksBlockId, TrieHash};
 use stacks_common::util::hash::{MerkleTree, Sha512Trunc256Sum};
-use stacks_common::util::secp256k1::MessageSignature;
+use stacks_common::util::secp256k1::{MessageSignature, Secp256k1PrivateKey};
 use stacks_signer::client::{BlockResponse, SignerMessage, SIGNER_SLOTS_PER_USER};
 use stacks_signer::config::{Config as SignerConfig, Network};
 use stacks_signer::runloop::RunLoopCommand;
@@ -311,7 +309,7 @@ fn setup_stx_btc_node(
         &naka_conf,
         &blocks_processed,
         stacker_sk,
-        StacksPublicKey::new(),
+        Secp256k1PrivateKey::default(),
         &mut btc_regtest_controller,
     );
 
