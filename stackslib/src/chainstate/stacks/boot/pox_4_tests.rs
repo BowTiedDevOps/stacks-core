@@ -41,7 +41,7 @@ use stacks_common::types::chainstate::{
 };
 use stacks_common::types::{Address, PrivateKey};
 use stacks_common::util::hash::{hex_bytes, to_hex, Sha256Sum, Sha512Trunc256Sum};
-use stacks_common::util::secp256k1::Secp256k1PrivateKey;
+use stacks_common::util::secp256k1::{Secp256k1PrivateKey, Secp256k1PublicKey};
 use wsts::curve::point::{Compressed, Point};
 
 use super::test::*;
@@ -75,6 +75,7 @@ use crate::core::*;
 use crate::net::test::{TestEventObserver, TestPeer};
 use crate::util_lib::boot::boot_code_id;
 use crate::util_lib::db::{DBConn, FromRow};
+use crate::util_lib::signed_structured_data::structured_data_message_hash;
 
 const USTX_PER_HOLDER: u128 = 1_000_000;
 
@@ -1235,8 +1236,6 @@ fn pox_4_revoke_delegate_stx_events() {
 
     // alice delegates 100 STX to Bob
     let alice_delegation_amount = 100_000_000;
-    let cur_reward_cycle = get_current_reward_cycle(&peer, &burnchain);
-    let signature = make_delegate_stx_signature(&alice_principal, &bob, cur_reward_cycle);
     let alice_delegate_nonce = alice_nonce;
     let alice_delegate = make_pox_4_delegate_stx(
         &alice,
@@ -1351,158 +1350,190 @@ fn pox_4_revoke_delegate_stx_events() {
     );
 }
 
-// #[test]
-// fn delegate_stx_signature_validation() {
-//     let (epochs, pox_constants) = make_test_epochs_pox();
+fn generate_signer_key_sig_msg_hash(
+    stacker: &PrincipalData,
+    signer_key: &Secp256k1PrivateKey,
+    reward_cycle: u128,
+) -> Sha256Sum {
+    let domain_tuple = Value::Tuple(
+        TupleData::from_data(vec![
+            (
+                "name".into(),
+                Value::string_ascii_from_bytes("pox-4-signer".into()).unwrap(),
+            ),
+            (
+                "version".into(),
+                Value::string_ascii_from_bytes("1.0.0".into()).unwrap(),
+            ),
+            ("chain-id".into(), Value::UInt(CHAIN_ID_TESTNET.into())),
+        ])
+        .unwrap(),
+    );
+    let data_tuple = Value::Tuple(
+        TupleData::from_data(vec![
+            ("stacker".into(), Value::Principal(stacker.clone())),
+            ("reward-cycle".into(), Value::UInt(reward_cycle)),
+        ])
+        .unwrap(),
+    );
 
-//     let mut burnchain = Burnchain::default_unittest(
-//         0,
-//         &BurnchainHeaderHash::from_hex(BITCOIN_REGTEST_FIRST_BLOCK_HASH).unwrap(),
-//     );
-//     burnchain.pox_constants = pox_constants.clone();
+    structured_data_message_hash(data_tuple, domain_tuple)
+}
 
-//     let observer = TestEventObserver::new();
+fn validate_signer_key_sig(
+    signature: &Vec<u8>,
+    signing_key: &Secp256k1PublicKey,
+    stacker: &PrincipalData,
+    peer: &mut TestPeer,
+    burnchain: &Burnchain,
+    coinbase_nonce: &mut usize,
+    latest_block: &StacksBlockId,
+) -> Value {
+    let result: Value = with_sortdb(peer, |ref mut chainstate, ref mut sortdb| {
+        chainstate
+            .with_read_only_clarity_tx(&sortdb.index_conn(), &latest_block, |clarity_tx| {
+                clarity_tx
+                    .with_readonly_clarity_env(
+                        false,
+                        0x80000000,
+                        ClarityVersion::Clarity2,
+                        PrincipalData::Standard(StandardPrincipalData::transient()),
+                        None,
+                        LimitedCostTracker::new_free(),
+                        |env| {
+                            let program = format!(
+                                "(verify-signing-key-signature '{} 0x{} 0x{})",
+                                stacker.to_string(),
+                                signing_key.to_hex(),
+                                to_hex(&signature),
+                            );
+                            env.eval_read_only(&boot_code_id("pox-4", false), &program)
+                        },
+                    )
+                    .unwrap()
+            })
+            .unwrap()
+    });
+    result
+}
 
-//     let (mut peer, mut keys) = instantiate_pox_peer_with_epoch(
-//         &burnchain,
-//         function_name!(),
-//         Some(epochs.clone()),
-//         Some(&observer),
-//     );
+#[test]
+fn validate_signer_key_sigs() {
+    let (epochs, pox_constants) = make_test_epochs_pox();
 
-//     assert_eq!(burnchain.pox_constants.reward_slots(), 6);
-//     let mut coinbase_nonce = 0;
-//     let mut latest_block;
+    let mut burnchain = Burnchain::default_unittest(
+        0,
+        &BurnchainHeaderHash::from_hex(BITCOIN_REGTEST_FIRST_BLOCK_HASH).unwrap(),
+    );
+    burnchain.pox_constants = pox_constants.clone();
 
-//     // alice
-//     let alice = keys.pop().unwrap();
-//     let alice_address = key_to_stacks_addr(&alice);
-//     let alice_principal = PrincipalData::from(alice_address.clone());
+    let observer = TestEventObserver::new();
 
-//     // bob
-//     let bob = keys.pop().unwrap();
-//     let bob_address = key_to_stacks_addr(&bob);
-//     let bob_principal = PrincipalData::from(bob_address.clone());
-//     let bob_pox_addr = make_pox_addr(AddressHashMode::SerializeP2PKH, bob_address.bytes.clone());
+    let (mut peer, mut keys) = instantiate_pox_peer_with_epoch(
+        &burnchain,
+        function_name!(),
+        Some(epochs.clone()),
+        Some(&observer),
+    );
 
-//     let mut alice_nonce = 0;
+    assert_eq!(burnchain.pox_constants.reward_slots(), 6);
+    let mut coinbase_nonce = 0;
+    let mut latest_block;
 
-//     // Advance into pox4
-//     let target_height = burnchain.pox_constants.pox_4_activation_height;
-//     // produce blocks until the first reward phase that everyone should be in
-//     while get_tip(peer.sortdb.as_ref()).block_height < u64::from(target_height) {
-//         latest_block = peer.tenure_with_txs(&[], &mut coinbase_nonce);
-//     }
+    // alice
+    let alice = keys.pop().unwrap();
+    let alice_address = key_to_stacks_addr(&alice);
+    let alice_principal = PrincipalData::from(alice_address.clone());
 
-//     info!(
-//         "Block height: {}",
-//         get_tip(peer.sortdb.as_ref()).block_height
-//     );
+    // bob
+    let bob = keys.pop().unwrap();
+    let bob_address = key_to_stacks_addr(&bob);
+    let bob_principal = PrincipalData::from(bob_address.clone());
+    let bob_pox_addr = make_pox_addr(AddressHashMode::SerializeP2PKH, bob_address.bytes.clone());
+    let bob_public_key = StacksPublicKey::from_private(&bob);
 
-//     // alice delegates 100 STX to Bob
-//     let alice_delegation_amount = 100_000_000;
-//     let cur_reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+    // Advance into pox4
+    let target_height = burnchain.pox_constants.pox_4_activation_height;
+    // produce blocks until the first reward phase that everyone should be in
+    while get_tip(peer.sortdb.as_ref()).block_height < u64::from(target_height) {
+        latest_block = peer.tenure_with_txs(&[], &mut coinbase_nonce);
+    }
 
-//     // Test 1: invalid block-height used in signature
+    latest_block = peer.tenure_with_txs(&[], &mut coinbase_nonce);
 
-//     let last_reward_cycle = cur_reward_cycle - 1;
-//     let signature = make_delegate_stx_signature(&alice_principal, &bob, last_reward_cycle);
-//     let invalid_cycle_nonce = alice_nonce;
-//     let invalid_cycle_delegate = make_pox_4_delegate_stx(
-//         &alice,
-//         alice_nonce,
-//         alice_delegation_amount,
-//         bob_principal.clone(),
-//         None,
-//         None,
-//         &signature,
-//     );
+    let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
 
-//     alice_nonce += 1;
+    let expected_error = Value::error(Value::Int(35)).unwrap();
 
-//     // Test 2: invalid sender used in signature
+    // Test 1: invalid block-height used in signature
 
-//     let signature = make_delegate_stx_signature(&bob_principal, &bob, cur_reward_cycle);
-//     let invalid_sender_nonce = alice_nonce;
-//     let invalid_sender_delegate = make_pox_4_delegate_stx(
-//         &alice,
-//         alice_nonce,
-//         alice_delegation_amount,
-//         bob_principal.clone(),
-//         None,
-//         None,
-//         &signature,
-//     );
+    let last_reward_cycle = reward_cycle - 1;
+    let signature = make_signer_key_signature(&alice_principal, &bob, last_reward_cycle);
 
-//     alice_nonce += 1;
+    let result = validate_signer_key_sig(
+        &signature,
+        &bob_public_key,
+        &alice_principal,
+        &mut peer,
+        &burnchain,
+        &mut coinbase_nonce,
+        &latest_block,
+    );
+    assert_eq!(result, expected_error);
 
-//     // Test 3: signature not from delegator's key
+    // Test 2: Invalid stacker used in signature
 
-//     let signature = make_delegate_stx_signature(&alice_principal, &alice, cur_reward_cycle);
-//     let invalid_signer_nonce = alice_nonce;
-//     let invalid_signer_delegate = make_pox_4_delegate_stx(
-//         &alice,
-//         alice_nonce,
-//         alice_delegation_amount,
-//         bob_principal.clone(),
-//         None,
-//         None,
-//         &signature,
-//     );
+    let signature = make_signer_key_signature(&bob_principal, &bob, reward_cycle);
 
-//     alice_nonce += 1;
+    let result = validate_signer_key_sig(
+        &signature,
+        &bob_public_key,
+        &alice_principal, // different stacker
+        &mut peer,
+        &burnchain,
+        &mut coinbase_nonce,
+        &latest_block,
+    );
 
-//     // Finally, test with valid signature
-//     let signature = make_delegate_stx_signature(&alice_principal, &bob, cur_reward_cycle);
-//     let valid_delegate_nonce = alice_nonce;
-//     let valid_delegate = make_pox_4_delegate_stx(
-//         &alice,
-//         alice_nonce,
-//         alice_delegation_amount,
-//         bob_principal,
-//         None,
-//         None,
-//         &signature,
-//     );
+    assert_eq!(result, expected_error);
 
-//     peer.tenure_with_txs(
-//         &[
-//             invalid_cycle_delegate,
-//             invalid_sender_delegate,
-//             invalid_signer_delegate,
-//             valid_delegate,
-//         ],
-//         &mut coinbase_nonce,
-//     );
+    // Test 3: Invalid signer key used in signature
 
-//     let blocks = observer.get_blocks();
-//     let mut alice_txs = HashMap::new();
+    let signature = make_signer_key_signature(&alice_principal, &alice, reward_cycle);
 
-//     for b in blocks.into_iter() {
-//         for r in b.receipts.into_iter() {
-//             if let TransactionOrigin::Stacks(ref t) = r.transaction {
-//                 let addr = t.auth.origin().address_testnet();
-//                 if addr == alice_address {
-//                     alice_txs.insert(t.auth.get_origin_nonce(), r);
-//                 }
-//             }
-//         }
-//     }
+    let result = validate_signer_key_sig(
+        &signature,
+        &bob_public_key, // different key
+        &alice_principal,
+        &mut peer,
+        &burnchain,
+        &mut coinbase_nonce,
+        &latest_block,
+    );
 
-//     let expected_error = Value::error(Value::Int(35)).unwrap();
+    assert_eq!(result, expected_error);
 
-//     let invalid_sender_tx = &alice_txs.get(&invalid_sender_nonce).unwrap().clone();
-//     assert_eq!(invalid_sender_tx.result, expected_error);
+    // Test 4: using a valid signature
 
-//     let invalid_cycle_tx = &alice_txs.get(&invalid_cycle_nonce).unwrap().clone();
-//     assert_eq!(invalid_cycle_tx.result, expected_error);
+    // println!("Reward cycle: {}", reward_cycle);
+    // let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+    // println!("Reward cycle: {}", reward_cycle);
+    // // println!("")
 
-//     let invalid_signer_tx = &alice_txs.get(&invalid_signer_nonce).unwrap().clone();
-//     assert_eq!(invalid_signer_tx.result, expected_error);
+    let signature = make_signer_key_signature(&alice_principal, &bob, reward_cycle);
 
-//     let valid_delegate_tx = &alice_txs.get(&valid_delegate_nonce).unwrap().clone();
-//     assert_eq!(valid_delegate_tx.result, Value::okay_true());
-// }
+    let result = validate_signer_key_sig(
+        &signature,
+        &bob_public_key,
+        &alice_principal,
+        &mut peer,
+        &burnchain,
+        &mut coinbase_nonce,
+        &latest_block,
+    );
+
+    assert_eq!(result, Value::okay_true());
+}
 
 fn assert_latest_was_burn(peer: &mut TestPeer) {
     let tip = get_tip(peer.sortdb.as_ref());
@@ -1898,7 +1929,7 @@ fn delegate_stack_stx_extend_signer_key() {
     let delegate_stack_stx = make_pox_4_delegate_stack_stx(
         bob_delegate_private_key,
         bob_nonce,
-        alice_principal,
+        alice_principal.clone(),
         100,
         pox_addr.clone(),
         block_height as u128,
@@ -1913,21 +1944,13 @@ fn delegate_stack_stx_extend_signer_key() {
 
     let latest_block = peer.tenure_with_txs(&txs, &mut coinbase_nonce);
 
-    let delegation_state = get_delegation_state_pox_4(
-        &mut peer,
-        &latest_block,
-        &key_to_stacks_addr(alice_stacker_key).to_account_principal(),
-    )
-    .expect("No delegation state, delegate-stx failed")
-    .expect_tuple();
+    let delegation_state = get_delegation_state_pox_4(&mut peer, &latest_block, &alice_principal)
+        .expect("No delegation state, delegate-stx failed")
+        .expect_tuple();
 
-    let stacking_state = get_stacking_state_pox_4(
-        &mut peer,
-        &latest_block,
-        &key_to_stacks_addr(alice_stacker_key).to_account_principal(),
-    )
-    .expect("No stacking state, stack-stx failed")
-    .expect_tuple();
+    let stacking_state = get_stacking_state_pox_4(&mut peer, &latest_block, &alice_principal)
+        .expect("No stacking state, stack-stx failed")
+        .expect_tuple();
 
     // Testing initial signer-key correctly set
     let state_signer_key = stacking_state.get("signer-key").unwrap();
@@ -1941,7 +1964,7 @@ fn delegate_stack_stx_extend_signer_key() {
     let delegate_stack_extend = make_pox_4_delegate_stack_extend(
         bob_delegate_private_key,
         alice_nonce,
-        PrincipalData::from(key_to_stacks_addr(alice_stacker_key)).into(),
+        alice_principal.clone(),
         pox_addr.clone(),
         bob_new_signer_public_key.clone(),
         1,
@@ -1951,13 +1974,9 @@ fn delegate_stack_stx_extend_signer_key() {
     let txs = vec![delegate_stack_extend];
 
     let latest_block = peer.tenure_with_txs(&txs, &mut coinbase_nonce);
-    let new_stacking_state = get_stacking_state_pox_4(
-        &mut peer,
-        &latest_block,
-        &key_to_stacks_addr(alice_stacker_key).to_account_principal(),
-    )
-    .unwrap()
-    .expect_tuple();
+    let new_stacking_state = get_stacking_state_pox_4(&mut peer, &latest_block, &alice_principal)
+        .unwrap()
+        .expect_tuple();
 
     // Testing new signer-key correctly set
     let state_signer_key_new = new_stacking_state.get("signer-key").unwrap();

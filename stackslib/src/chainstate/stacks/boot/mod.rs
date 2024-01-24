@@ -1869,8 +1869,8 @@ pub mod test {
             vec![
                 Value::Principal(stacker.clone()),
                 Value::Tuple(pox_addr.as_clarity_tuple().unwrap()),
-                Value::buff_from(signer_key.to_bytes_compressed()).unwrap(),
                 Value::UInt(extend_count),
+                Value::buff_from(signer_key.to_bytes_compressed()).unwrap(),
             ],
         )
         .unwrap();
@@ -1979,37 +1979,6 @@ pub mod test {
         let signature = sign_structured_data(data_tuple, domain_tuple, signer_key).unwrap();
 
         signature.to_rsv()
-    }
-
-    pub fn make_delegate_stx_signature(
-        stacker: &PrincipalData,
-        delegator_key: &Secp256k1PrivateKey,
-        reward_cycle: u128,
-    ) -> Vec<u8> {
-        let msg_tuple = Value::Tuple(
-            TupleData::from_data(vec![
-                ("stacker".into(), Value::Principal(stacker.clone())),
-                ("reward-cycle".into(), Value::UInt(reward_cycle)),
-            ])
-            .unwrap(),
-        );
-
-        let mut tuple_bytes = vec![];
-        msg_tuple
-            .serialize_write(&mut tuple_bytes)
-            .expect("Failed to serialize delegate sig data");
-        let msg_hash = Sha256Sum::from_data(&tuple_bytes).as_bytes().to_vec();
-
-        let signature = &delegator_key
-            .sign(&msg_hash)
-            .expect("Unable to sign delegate sig data");
-
-        // Convert signature into rsv as needed for `secp256k1-recover?`
-        let mut ret_bytes = Vec::new();
-        ret_bytes.extend(&signature[1..]);
-        ret_bytes.push(signature[0]);
-
-        ret_bytes
     }
 
     fn make_tx(

@@ -674,6 +674,7 @@
 
       (ok true)))
 
+;; Generate a message hash following the SIP018 standard.
 (define-read-only (get-signer-key-message-hash (signer-key (buff 33)) (stacker principal))
   (let
     (
@@ -700,9 +701,6 @@
                                                 (signer-sig (buff 65)))
   (let
     (
-      ;; (msg { stacker: stacker, reward-cycle: (current-pox-reward-cycle) })
-      ;; (msg-bytes (unwrap! (to-consensus-buff? msg) ERR_DELEGATION_INVALID_SIGNATURE)) ;;TODO
-      ;; ;; (msg-hash (sha256 msg-bytes))
       (msg-hash (get-signer-key-message-hash signing-key stacker))
       (pubkey (unwrap! (secp256k1-recover? msg-hash signer-sig) ERR_DELEGATION_INVALID_SIGNATURE)) ;; TODO
     )
