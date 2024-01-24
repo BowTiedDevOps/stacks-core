@@ -24,6 +24,7 @@ use stacks_common::types::chainstate::{
     StacksAddress, StacksBlockId, StacksPrivateKey, StacksPublicKey,
 };
 use stacks_common::types::{Address, StacksEpoch};
+use stacks_common::util::secp256k1::Secp256k1PrivateKey;
 use stacks_common::util::vrf::VRFProof;
 use wsts::curve::point::Point;
 
@@ -34,7 +35,9 @@ use crate::chainstate::nakamoto::tests::get_account;
 use crate::chainstate::nakamoto::tests::node::TestSigners;
 use crate::chainstate::nakamoto::{NakamotoBlock, NakamotoChainState};
 use crate::chainstate::stacks::address::PoxAddress;
-use crate::chainstate::stacks::boot::test::{make_pox_4_aggregate_key, make_pox_4_lockup};
+use crate::chainstate::stacks::boot::test::{
+    make_pox_4_aggregate_key, make_pox_4_lockup, make_signer_key_signature,
+};
 use crate::chainstate::stacks::boot::MINERS_NAME;
 use crate::chainstate::stacks::db::{MinerPaymentTxFees, StacksAccount, StacksChainState};
 use crate::chainstate::stacks::{
@@ -53,12 +56,8 @@ use crate::util_lib::boot::boot_code_id;
 fn advance_to_nakamoto(peer: &mut TestPeer) {
     let mut peer_nonce = 0;
     let private_key = peer.config.private_key.clone();
-    let signer_key = StacksPublicKey::from_slice(&[
-        0x02, 0xb6, 0x19, 0x6d, 0xe8, 0x8b, 0xce, 0xe7, 0x93, 0xfa, 0x9a, 0x8a, 0x85, 0x96, 0x9b,
-        0x64, 0x7f, 0x84, 0xc9, 0x0e, 0x9d, 0x13, 0xf9, 0xc8, 0xb8, 0xce, 0x42, 0x6c, 0xc8, 0x1a,
-        0x59, 0x98, 0x3c,
-    ])
-    .unwrap();
+    let signer_private = Secp256k1PrivateKey::default();
+    let signer_key = StacksPublicKey::from_private(&signer_private);
     let addr = StacksAddress::from_public_keys(
         C32_ADDRESS_VERSION_TESTNET_SINGLESIG,
         &AddressHashMode::SerializeP2PKH,
@@ -66,10 +65,12 @@ fn advance_to_nakamoto(peer: &mut TestPeer) {
         &vec![StacksPublicKey::from_private(&private_key)],
     )
     .unwrap();
+    let stacker = PrincipalData::from(addr);
 
     for sortition_height in 0..11 {
         // stack to pox-3 in cycle 7
         let txs = if sortition_height == 6 {
+            let signature = make_signer_key_signature(&stacker, &signer_private, 7_u128);
             // stack them all
             let stack_tx = make_pox_4_lockup(
                 &private_key,
@@ -79,6 +80,7 @@ fn advance_to_nakamoto(peer: &mut TestPeer) {
                 12,
                 signer_key,
                 34,
+                signature,
             );
             vec![stack_tx]
         } else {

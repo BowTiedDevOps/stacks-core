@@ -1027,6 +1027,7 @@
 ;;    used for signing. The `tx-sender` can thus decide to change the key when extending.
 (define-public (stack-extend (extend-count uint)
                              (pox-addr { version: (buff 1), hashbytes: (buff 32) })
+                             (signer-sig (buff 65))
                              (signer-key (buff 33)))
    (let ((stacker-info (stx-account tx-sender))
          ;; to extend, there must already be an etry in the stacking-state
@@ -1051,6 +1052,9 @@
     ;; stacker must not be delegating
     (asserts! (is-none (get delegated-to stacker-state))
               (err ERR_STACKING_IS_DELEGATED))
+
+    ;; Verify signature from delegate that allows this sender for this cycle
+    (try! (verify-signing-key-signature tx-sender signer-key signer-sig))
 
     ;; ensure the signer key can be used
     (try! (insert-signer-key signer-key))

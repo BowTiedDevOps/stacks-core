@@ -479,6 +479,14 @@ fn pox_extend_transition() {
         latest_block = peer.tenure_with_txs(&[], &mut coinbase_nonce);
     }
 
+    // Key 3
+    let alice_signer_private = keys.pop().unwrap();
+    let alice_signer_key = StacksPublicKey::from_private(&alice_signer_private);
+    let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+
+    let alice_signature =
+        make_signer_key_signature(&alice_principal, &alice_signer_private, reward_cycle);
+
     let tip = get_tip(peer.sortdb.as_ref());
     let alice_lockup = make_pox_4_lockup(
         &alice,
@@ -489,8 +497,9 @@ fn pox_extend_transition() {
             key_to_stacks_addr(&alice).bytes,
         ),
         4,
-        StacksPublicKey::default(),
+        alice_signer_key,
         tip.block_height,
+        alice_signature,
     );
     let alice_pox_4_lock_nonce = 2;
     let alice_first_pox_4_unlock_height =
@@ -534,16 +543,13 @@ fn pox_extend_transition() {
         latest_block = peer.tenure_with_txs(&[], &mut coinbase_nonce);
     }
 
-    let bob_signer_key: [u8; 33] = [
-        0x02, 0xb6, 0x19, 0x6d, 0xe8, 0x8b, 0xce, 0xe7, 0x93, 0xfa, 0x9a, 0x8a, 0x85, 0x96, 0x9b,
-        0x64, 0x7f, 0x84, 0xc9, 0x0e, 0x9d, 0x13, 0xf9, 0xc8, 0xb8, 0xce, 0x42, 0x6c, 0xc8, 0x1a,
-        0x59, 0x98, 0x3c,
-    ];
-    let alice_signer_key: [u8; 33] = [
-        0x03, 0xa0, 0xf9, 0x81, 0x8e, 0xa8, 0xc1, 0x4a, 0x82, 0x7b, 0xb1, 0x44, 0xae, 0xc9, 0xcf,
-        0xba, 0xeb, 0xa2, 0x25, 0xaf, 0x22, 0xbe, 0x18, 0xed, 0x78, 0xa2, 0xf2, 0x98, 0x10, 0x6f,
-        0x4e, 0x28, 0x1b,
-    ];
+    // Key 4
+    let bob_signer_private = keys.pop().unwrap();
+    let bob_signer_key = StacksPublicKey::from_private(&bob_signer_private);
+
+    let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+    let bob_signature =
+        make_signer_key_signature(&bob_principal, &bob_signer_private, reward_cycle);
 
     let tip = get_tip(peer.sortdb.as_ref());
     let bob_lockup = make_pox_4_lockup(
@@ -555,9 +561,17 @@ fn pox_extend_transition() {
             key_to_stacks_addr(&bob).bytes,
         ),
         3,
-        StacksPublicKey::from_slice(&bob_signer_key).unwrap(),
+        bob_signer_key,
         tip.block_height,
+        bob_signature,
     );
+
+    // new signing key needed
+    let alice_signer_private = Secp256k1PrivateKey::default();
+    let alice_signer_key = StacksPublicKey::from_private(&alice_signer_private);
+
+    let alice_signature =
+        make_signer_key_signature(&alice_principal, &alice_signer_private, reward_cycle);
 
     // Alice can stack-extend in PoX v2
     let alice_lockup = make_pox_4_extend(
@@ -568,7 +582,8 @@ fn pox_extend_transition() {
             key_to_stacks_addr(&alice).bytes,
         ),
         6,
-        StacksPublicKey::from_slice(&alice_signer_key).unwrap(),
+        alice_signer_key,
+        alice_signature,
     );
 
     let alice_pox_4_extend_nonce = 3;
@@ -806,7 +821,11 @@ fn pox_lock_unlock() {
     );
 
     let mut txs = vec![];
-    let tip_height = get_tip(peer.sortdb.as_ref()).block_height;
+    let tip = get_tip(peer.sortdb.as_ref());
+    let tip_height = tip.block_height;
+    let reward_cycle = burnchain
+        .block_height_to_reward_cycle(tip.block_height)
+        .unwrap() as u128;
     let stackers: Vec<_> = keys
         .iter()
         .zip([
@@ -816,6 +835,12 @@ fn pox_lock_unlock() {
             AddressHashMode::SerializeP2WSH,
         ])
         .map(|(key, hash_mode)| {
+            let signer_key = key;
+            let signer_pubkey = StacksPublicKey::from_private(signer_key);
+
+            let stacker = PrincipalData::from(key_to_stacks_addr(key));
+
+            let signature = make_signer_key_signature(&stacker, &signer_key, reward_cycle);
             let pox_addr = PoxAddress::from_legacy(hash_mode, key_to_stacks_addr(key).bytes);
             txs.push(make_pox_4_lockup(
                 key,
@@ -823,8 +848,9 @@ fn pox_lock_unlock() {
                 1024 * POX_THRESHOLD_STEPS_USTX,
                 pox_addr.clone(),
                 lock_period,
-                StacksPublicKey::default(),
+                signer_pubkey,
                 tip_height,
+                signature,
             ));
             pox_addr
         })
@@ -1794,13 +1820,11 @@ fn stack_extend_signer_key() {
     let state_signer_key = stacking_state.get("signer-key").unwrap();
     assert_eq!(state_signer_key.to_string(), signer_key_val.to_string());
 
-    // now stack-extend with a new signer-key
-    let signer_key_new_val = Value::buff_from(vec![
-        0x02, 0xb6, 0x19, 0x6d, 0xe8, 0x8b, 0xce, 0xe7, 0x93, 0xfa, 0x9a, 0x8a, 0x85, 0x96, 0x9b,
-        0x64, 0x7f, 0x84, 0xc9, 0x0e, 0x9d, 0x13, 0xf9, 0xc8, 0xb8, 0xce, 0x42, 0x6c, 0xc8, 0x1a,
-        0x59, 0x98, 0x3c,
-    ])
-    .unwrap();
+    let signer_key_new = &keys[2];
+    let signer_public_key_new = StacksPublicKey::from_private(signer_key_new);
+    let signer_key_new_val = Value::buff_from(signer_public_key_new.to_bytes_compressed()).unwrap();
+
+    let signature = make_signer_key_signature(&stacker, &signer_key_new, reward_cycle);
 
     // (define-public (stack-extend (extend-count uint)
     //                          (pox-addr { version: (buff 1), hashbytes: (buff 32) })
@@ -1809,7 +1833,12 @@ fn stack_extend_signer_key() {
         stacker_key,
         stacker_nonce,
         "stack-extend",
-        vec![Value::UInt(1), pox_addr, signer_key_new_val.clone()],
+        vec![
+            Value::UInt(1),
+            pox_addr,
+            Value::buff_from(signature.clone()).unwrap(),
+            signer_key_new_val.clone(),
+        ],
     )];
 
     latest_block = peer.tenure_with_txs(&update_txs, &mut coinbase_nonce);
@@ -2025,6 +2054,12 @@ fn stack_increase() {
         AddressHashMode::SerializeP2PKH,
         key_to_stacks_addr(alice_stacking_private_key).bytes,
     );
+    let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+    let signature = make_signer_key_signature(
+        &PrincipalData::from(alice_address.clone()),
+        &alice_signing_private_key,
+        reward_cycle,
+    );
 
     let stack_stx = make_pox_4_lockup(
         alice_stacking_private_key,
@@ -2034,6 +2069,7 @@ fn stack_increase() {
         lock_period,
         alice_signing_public_key.clone(),
         block_height as u64,
+        signature,
     );
 
     // Initial tx arr includes a stack_stx pox_4 helper found in mod.rs
