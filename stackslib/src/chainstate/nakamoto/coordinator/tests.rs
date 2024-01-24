@@ -56,7 +56,10 @@ use crate::util_lib::boot::boot_code_id;
 fn advance_to_nakamoto(peer: &mut TestPeer) {
     let mut peer_nonce = 0;
     let private_key = peer.config.private_key.clone();
-    let signer_private = Secp256k1PrivateKey::default();
+    let signer_private = StacksPrivateKey::from_hex(
+        "11d055ac8b0ab4f04c5eb5ea4b4def9c60ae338355d81c9411b27b4f49da2a8301",
+    )
+    .unwrap();
     let signer_key = StacksPublicKey::from_private(&signer_private);
     let addr = StacksAddress::from_public_keys(
         C32_ADDRESS_VERSION_TESTNET_SINGLESIG,
@@ -70,7 +73,7 @@ fn advance_to_nakamoto(peer: &mut TestPeer) {
     for sortition_height in 0..11 {
         // stack to pox-3 in cycle 7
         let txs = if sortition_height == 6 {
-            let signature = make_signer_key_signature(&stacker, &signer_private, 7_u128);
+            let signature = make_signer_key_signature(&stacker, &signer_private, 6_u128);
             // stack them all
             let stack_tx = make_pox_4_lockup(
                 &private_key,
