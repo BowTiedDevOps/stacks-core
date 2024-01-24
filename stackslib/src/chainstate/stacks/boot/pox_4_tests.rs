@@ -1616,6 +1616,14 @@ fn stack_stx_signer_key() {
     let stacker_nonce = 0;
     let stacker_key = &keys[0];
     let min_ustx = get_stacking_minimum(&mut peer, &latest_block);
+    let stacker = PrincipalData::from(key_to_stacks_addr(stacker_key));
+    let signer_key = &keys[1];
+    let signer_public_key = StacksPublicKey::from_private(signer_key);
+    let signer_key_val = Value::buff_from(signer_public_key.to_bytes_compressed()).unwrap();
+
+    let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+
+    let signature = make_signer_key_signature(&stacker, &signer_key, reward_cycle);
 
     // (define-public (stack-stx (amount-ustx uint)
     //                       (pox-addr (tuple (version (buff 1)) (hashbytes (buff 32))))
@@ -1626,12 +1634,6 @@ fn stack_stx_signer_key() {
         AddressHashMode::SerializeP2WSH,
         key_to_stacks_addr(stacker_key).bytes,
     );
-    let signer_key_val = Value::buff_from(vec![
-        0x03, 0xa0, 0xf9, 0x81, 0x8e, 0xa8, 0xc1, 0x4a, 0x82, 0x7b, 0xb1, 0x44, 0xae, 0xc9, 0xcf,
-        0xba, 0xeb, 0xa2, 0x25, 0xaf, 0x22, 0xbe, 0x18, 0xed, 0x78, 0xa2, 0xf2, 0x98, 0x10, 0x6f,
-        0x4e, 0x28, 0x1b,
-    ])
-    .unwrap();
     let txs = vec![make_pox_4_contract_call(
         stacker_key,
         stacker_nonce,
@@ -1641,6 +1643,7 @@ fn stack_stx_signer_key() {
             pox_addr,
             Value::UInt(block_height as u128),
             Value::UInt(2),
+            Value::buff_from(signature.clone()).unwrap(),
             signer_key_val.clone(),
         ],
     )];
@@ -1676,12 +1679,18 @@ fn stack_stx_signer_key_no_reuse() {
         AddressHashMode::SerializeP2WSH,
         key_to_stacks_addr(first_stacker_key).bytes,
     );
-    let signer_key_val = Value::buff_from(vec![
-        0x03, 0xa0, 0xf9, 0x81, 0x8e, 0xa8, 0xc1, 0x4a, 0x82, 0x7b, 0xb1, 0x44, 0xae, 0xc9, 0xcf,
-        0xba, 0xeb, 0xa2, 0x25, 0xaf, 0x22, 0xbe, 0x18, 0xed, 0x78, 0xa2, 0xf2, 0x98, 0x10, 0x6f,
-        0x4e, 0x28, 0x1b,
-    ])
-    .unwrap();
+    let first_stacker = PrincipalData::from(key_to_stacks_addr(first_stacker_key));
+    let second_stacker = PrincipalData::from(key_to_stacks_addr(second_stacker_key));
+    let signer_key = &keys[2];
+    let signer_public_key = StacksPublicKey::from_private(signer_key);
+    let signer_key_val = Value::buff_from(signer_public_key.to_bytes_compressed()).unwrap();
+
+    let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+
+    let first_signature = make_signer_key_signature(&first_stacker, &signer_key, reward_cycle);
+    let second_signature = make_signer_key_signature(&second_stacker, &signer_key, reward_cycle);
+
+    let signature_val = Value::buff_from(first_signature.clone()).unwrap();
     let txs = vec![
         make_pox_4_contract_call(
             first_stacker_key,
@@ -1692,6 +1701,7 @@ fn stack_stx_signer_key_no_reuse() {
                 pox_addr.clone(),
                 Value::UInt(block_height as u128),
                 Value::UInt(2),
+                Value::buff_from(first_signature.clone()).unwrap(),
                 signer_key_val.clone(),
             ],
         ),
@@ -1704,6 +1714,7 @@ fn stack_stx_signer_key_no_reuse() {
                 pox_addr.clone(),
                 Value::UInt(block_height as u128),
                 Value::UInt(2),
+                Value::buff_from(second_signature.clone()).unwrap(),
                 signer_key_val.clone(),
             ],
         ),
@@ -1739,6 +1750,7 @@ fn stack_extend_signer_key() {
 
     let mut stacker_nonce = 0;
     let stacker_key = &keys[0];
+    let stacker = PrincipalData::from(key_to_stacks_addr(stacker_key));
     let min_ustx = get_stacking_minimum(&mut peer, &latest_block) * 2;
 
     let pox_addr = make_pox_addr(
@@ -1746,12 +1758,14 @@ fn stack_extend_signer_key() {
         key_to_stacks_addr(stacker_key).bytes,
     );
 
-    let signer_key_val = Value::buff_from(vec![
-        0x03, 0xa0, 0xf9, 0x81, 0x8e, 0xa8, 0xc1, 0x4a, 0x82, 0x7b, 0xb1, 0x44, 0xae, 0xc9, 0xcf,
-        0xba, 0xeb, 0xa2, 0x25, 0xaf, 0x22, 0xbe, 0x18, 0xed, 0x78, 0xa2, 0xf2, 0x98, 0x10, 0x6f,
-        0x4e, 0x28, 0x1b,
-    ])
-    .unwrap();
+    let signer_key = &keys[1];
+    let signer_public_key = StacksPublicKey::from_private(signer_key);
+    let signer_key_val = Value::buff_from(signer_public_key.to_bytes_compressed()).unwrap();
+
+    let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+
+    let signature = make_signer_key_signature(&stacker, &signer_key, reward_cycle);
+
     let txs = vec![make_pox_4_contract_call(
         stacker_key,
         stacker_nonce,
@@ -1761,6 +1775,7 @@ fn stack_extend_signer_key() {
             pox_addr.clone(),
             Value::UInt(block_height as u128),
             Value::UInt(2),
+            Value::buff_from(signature.clone()).unwrap(),
             signer_key_val.clone(),
         ],
     )];
