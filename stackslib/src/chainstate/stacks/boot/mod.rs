@@ -1865,6 +1865,7 @@ pub mod test {
         pox_addr: PoxAddress,
         signer_key: StacksPublicKey,
         extend_count: u128,
+        signature: Vec<u8>,
     ) -> StacksTransaction {
         let payload: TransactionPayload = TransactionPayload::new_contract_call(
             boot_code_test_addr(),
@@ -1874,6 +1875,7 @@ pub mod test {
                 Value::Principal(stacker.clone()),
                 Value::Tuple(pox_addr.as_clarity_tuple().unwrap()),
                 Value::UInt(extend_count),
+                Value::buff_from(signature).unwrap(),
                 Value::buff_from(signer_key.to_bytes_compressed()).unwrap(),
             ],
         )

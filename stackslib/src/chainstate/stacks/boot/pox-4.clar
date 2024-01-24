@@ -597,7 +597,7 @@
         (err ERR_STACKING_INSUFFICIENT_FUNDS))
 
       ;; Validate ownership of the given signer key
-      (try! (verify-signing-key-signature tx-sender signer-key signer-sig))
+      (try! (verify-signer-key-sig tx-sender signer-key signer-sig))
 
       ;; ensure that stacking can be performed
       (try! (can-stack-stx pox-addr amount-ustx first-reward-cycle lock-period))
@@ -678,7 +678,10 @@
 
       (ok true)))
 
-;; Generate a message hash following the SIP018 standard.
+;; Generate a message hash for validating a signer key.
+;; The message hash follows SIP018 for signing structured data. The structured data
+;; is the tuple `{ stacker, reward-cycle }`. The domain is 
+;; `{ name: "pox-4-signer", version: "1.0.0", chain-id: chain-id }`.
 (define-read-only (get-signer-key-message-hash (signer-key (buff 33)) (stacker principal))
   (let
     (
@@ -695,20 +698,20 @@
 )
 
 ;; Verify a signature from the signing key for this specific stacker.
-;; The message hash is the sha256 of the consensus hash of the tuple 
-;; `{ stacker, reward-cycle }`. Note that `reward-cycle` corresponds to the
-;; _current_ reward cycle, not the reward cycle at which the delegation will start.
-;; The public key is recovered from the signature and compared to the pubkey hash
-;; of the delegator.
-(define-read-only (verify-signing-key-signature (stacker principal)
-                                                (signing-key (buff 33))
+;; See `get-signer-key-message-hash` for details on the message hash.
+;; 
+;; Note that `reward-cycle` corresponds to the _current_ reward cycle,
+;; not the reward cycle at which the delegation will start.
+;; The public key is recovered from the signature and compared to `signer-key`.
+(define-read-only (verify-signer-key-sig (stacker principal)
+                                                (signer-key (buff 33))
                                                 (signer-sig (buff 65)))
   (let
     (
-      (msg-hash (get-signer-key-message-hash signing-key stacker))
+      (msg-hash (get-signer-key-message-hash signer-key stacker))
       (pubkey (unwrap! (secp256k1-recover? msg-hash signer-sig) ERR_DELEGATION_INVALID_SIGNATURE)) ;; TODO
     )
-    (asserts! (is-eq pubkey signing-key) ERR_DELEGATION_INVALID_SIGNATURE)
+    (asserts! (is-eq pubkey signer-key) ERR_DELEGATION_INVALID_SIGNATURE)
     (ok true)
   )                                            
 )
@@ -873,7 +876,7 @@
         (err ERR_STACKING_PERMISSION_DENIED))
 
       ;; Verify signature from delegate that allows this sender for this cycle
-      (try! (verify-signing-key-signature stacker signer-key signer-sig))
+      (try! (verify-signer-key-sig stacker signer-key signer-sig))
 
       ;; stacker must have delegated to the caller
       (let ((delegation-info (unwrap! (get-check-delegation stacker) (err ERR_STACKING_PERMISSION_DENIED))))
@@ -1054,7 +1057,7 @@
               (err ERR_STACKING_IS_DELEGATED))
 
     ;; Verify signature from delegate that allows this sender for this cycle
-    (try! (verify-signing-key-signature tx-sender signer-key signer-sig))
+    (try! (verify-signer-key-sig tx-sender signer-key signer-sig))
 
     ;; ensure the signer key can be used
     (try! (insert-signer-key signer-key))
@@ -1208,6 +1211,7 @@
                     (stacker principal)
                     (pox-addr { version: (buff 1), hashbytes: (buff 32) })
                     (extend-count uint)
+                    (signer-sig (buff 65))
                     (signer-key (buff 33)))
     (let ((stacker-info (stx-account stacker))
           ;; to extend, there must already be an entry in the stacking-state
@@ -1241,6 +1245,9 @@
       ;; stacker must not be directly stacking
       (asserts! (is-eq (len (get reward-set-indexes stacker-state)) u0)
                 (err ERR_STACKING_NOT_DELEGATED))
+
+      ;; Validate that the owner of the signing key is allowing this stacker
+      (try! (verify-signer-key-sig stacker signer-key signer-sig))
 
       ;; stacker must be delegated to tx-sender
       (asserts! (is-eq (unwrap! (get delegated-to stacker-state)
