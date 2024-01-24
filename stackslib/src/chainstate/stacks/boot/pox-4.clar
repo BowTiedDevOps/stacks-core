@@ -682,7 +682,7 @@
 ;; The message hash follows SIP018 for signing structured data. The structured data
 ;; is the tuple `{ stacker, reward-cycle }`. The domain is 
 ;; `{ name: "pox-4-signer", version: "1.0.0", chain-id: chain-id }`.
-(define-read-only (get-signer-key-message-hash (signer-key (buff 33)) (stacker principal))
+(define-read-only (get-signer-key-message-hash (stacker principal))
   (let
     (
       (domain { name: "pox-4-signer", version: "1.0.0", chain-id: chain-id })
@@ -708,7 +708,7 @@
                                                 (signer-sig (buff 65)))
   (let
     (
-      (msg-hash (get-signer-key-message-hash signer-key stacker))
+      (msg-hash (get-signer-key-message-hash stacker))
       (pubkey (unwrap! (secp256k1-recover? msg-hash signer-sig) ERR_DELEGATION_INVALID_SIGNATURE)) ;; TODO
     )
     (asserts! (is-eq pubkey signer-key) ERR_DELEGATION_INVALID_SIGNATURE)

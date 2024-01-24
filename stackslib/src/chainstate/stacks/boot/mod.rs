@@ -1984,19 +1984,6 @@ pub mod test {
 
         let signature = sign_structured_data(data_tuple, domain_tuple, signer_key).unwrap();
 
-        {
-            // debugging
-            let key_hex = signer_key.to_hex();
-            let sig_hex = to_hex(&signature.to_rsv());
-            println!(
-                "\n\nDebugging signatures: {} {} {} {}\n\n",
-                stacker.to_string(),
-                reward_cycle,
-                sig_hex,
-                key_hex
-            );
-        }
-
         signature.to_rsv()
     }
 
