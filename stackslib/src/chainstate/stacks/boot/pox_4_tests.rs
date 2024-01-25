@@ -646,7 +646,6 @@ fn pox_extend_transition() {
         for r in b.receipts.into_iter() {
             if let TransactionOrigin::Stacks(ref t) = r.transaction {
                 let addr = t.auth.origin().address_testnet();
-                eprintln!("TX addr: {}", addr);
                 if addr == alice_address {
                     alice_txs.insert(t.auth.get_origin_nonce(), r);
                 } else if addr == bob_address {
@@ -1510,6 +1509,487 @@ fn verify_signer_key_signatures() {
     );
 
     assert_eq!(result, Value::okay_true());
+}
+
+#[test]
+fn stack_stx_verify_signer_sig() {
+    let lock_period = 2;
+    let observer = TestEventObserver::new();
+    let (burnchain, mut peer, keys, latest_block, block_height, coinbase_nonce) =
+        prepare_pox4_test(function_name!(), Some(&observer));
+
+    let mut coinbase_nonce = coinbase_nonce;
+
+    let mut stacker_nonce = 0;
+    let stacker_key = &keys[0];
+    let min_ustx = get_stacking_minimum(&mut peer, &latest_block);
+    let stacker_addr = key_to_stacks_addr(&stacker_key);
+    let stacker = PrincipalData::from(stacker_addr);
+    let signer_key = &keys[1];
+    let signer_public_key = StacksPublicKey::from_private(signer_key);
+    let pox_addr = pox_addr_from(&stacker_key);
+
+    let second_stacker = &keys[2];
+    let second_stacker_addr = key_to_stacks_addr(second_stacker);
+    let second_stacker_principal = PrincipalData::from(second_stacker_addr);
+
+    let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+
+    // Test 1: invalid reward cycle
+    let signature = make_signer_key_signature(&stacker, &signer_key, reward_cycle - 1);
+    let invalid_cycle_nonce = stacker_nonce;
+    let invalid_cycle_stack = make_pox_4_lockup(
+        &stacker_key,
+        stacker_nonce,
+        min_ustx,
+        pox_addr.clone(),
+        lock_period,
+        signer_public_key.clone(),
+        block_height,
+        signature,
+    );
+
+    // test 2: invalid stacker
+    stacker_nonce += 1;
+    let signature = make_signer_key_signature(&second_stacker_principal, &signer_key, reward_cycle);
+    let invalid_stacker_nonce = stacker_nonce;
+    let invalid_stacker_tx = make_pox_4_lockup(
+        &stacker_key,
+        stacker_nonce,
+        min_ustx,
+        pox_addr.clone(),
+        lock_period,
+        signer_public_key.clone(),
+        block_height,
+        signature,
+    );
+
+    // Test 3: invalid key used to sign
+    stacker_nonce += 1;
+    let signature = make_signer_key_signature(&stacker, &second_stacker, reward_cycle);
+    let invalid_key_nonce = stacker_nonce;
+    let invalid_key_tx = make_pox_4_lockup(
+        &stacker_key,
+        stacker_nonce,
+        min_ustx,
+        pox_addr.clone(),
+        lock_period,
+        signer_public_key.clone(),
+        block_height,
+        signature,
+    );
+
+    // Test 4: valid signature
+    stacker_nonce += 1;
+    let signature = make_signer_key_signature(&stacker, &signer_key, reward_cycle);
+    let valid_nonce = stacker_nonce;
+    let valid_tx = make_pox_4_lockup(
+        &stacker_key,
+        stacker_nonce,
+        min_ustx,
+        pox_addr,
+        lock_period,
+        signer_public_key.clone(),
+        block_height,
+        signature,
+    );
+
+    let txs = vec![
+        invalid_cycle_stack,
+        invalid_stacker_tx,
+        invalid_key_tx,
+        valid_tx,
+    ];
+
+    peer.tenure_with_txs(&txs, &mut coinbase_nonce);
+
+    let stacker_txs = get_last_block_sender_transactions(&observer, stacker_addr);
+    let expected_error = Value::error(Value::Int(35)).unwrap();
+
+    assert_eq!(stacker_txs.len(), (valid_nonce + 1) as usize);
+    let tx_result =
+        |nonce: u64| -> Value { stacker_txs.get(nonce as usize).unwrap().result.clone() };
+    assert_eq!(tx_result(invalid_cycle_nonce), expected_error);
+    assert_eq!(tx_result(invalid_stacker_nonce), expected_error);
+    assert_eq!(tx_result(invalid_key_nonce), expected_error);
+
+    // valid tx should succeed
+    tx_result(valid_nonce).expect_result_ok();
+}
+
+#[test]
+fn delegate_stack_stx_verify_sig() {
+    let lock_period = 2;
+    let observer = TestEventObserver::new();
+    let (burnchain, mut peer, keys, latest_block, block_height, coinbase_nonce) =
+        prepare_pox4_test(function_name!(), Some(&observer));
+
+    let mut coinbase_nonce = coinbase_nonce;
+
+    let mut signer_nonce = 0;
+    let signer_key = &keys[0];
+    let min_ustx = get_stacking_minimum(&mut peer, &latest_block);
+    let signer_addr = key_to_stacks_addr(&signer_key);
+    let signer = PrincipalData::from(signer_addr);
+    let signer_public_key = StacksPublicKey::from_private(signer_key);
+    let pox_addr = pox_addr_from(&signer_key);
+
+    let stacker_key = &keys[2];
+    let stacker_addr = key_to_stacks_addr(stacker_key);
+    let stacker_principal = PrincipalData::from(stacker_addr);
+
+    let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+
+    // Stacker calls `delegate-stx`
+    let delegate_stx = make_pox_4_delegate_stx(&stacker_key, 0, min_ustx, signer, None, None);
+
+    // Test 1: invalid reward cycle
+    let signature = make_signer_key_signature(&stacker_principal, &signer_key, reward_cycle - 1);
+    let invalid_cycle_nonce = signer_nonce;
+    let invalid_cycle_stack = make_pox_4_delegate_stack_stx(
+        &signer_key,
+        signer_nonce,
+        stacker_principal.clone(),
+        min_ustx,
+        pox_addr.clone(),
+        block_height.into(),
+        lock_period,
+        signature,
+        signer_public_key.clone(),
+    );
+
+    // Test 2: invalid stacker
+    signer_nonce += 1;
+    let other_stacker = PrincipalData::from(key_to_stacks_addr(&Secp256k1PrivateKey::new()));
+    let signature = make_signer_key_signature(&other_stacker, &signer_key, reward_cycle);
+    let invalid_stacker_nonce = signer_nonce;
+    let invalid_stacker_tx = make_pox_4_delegate_stack_stx(
+        &signer_key,
+        signer_nonce,
+        stacker_principal.clone(), // different than in sig
+        min_ustx,
+        pox_addr.clone(),
+        block_height.into(),
+        lock_period,
+        signature,
+        signer_public_key.clone(),
+    );
+
+    // Test 3: invalid key used to sign
+    signer_nonce += 1;
+    let signature = make_signer_key_signature(&stacker_principal, &stacker_key, reward_cycle);
+    let invalid_key_nonce = signer_nonce;
+    let invalid_key_tx = make_pox_4_delegate_stack_stx(
+        &signer_key,
+        signer_nonce,
+        stacker_principal.clone(),
+        min_ustx,
+        pox_addr.clone(),
+        block_height.into(),
+        lock_period,
+        signature,
+        signer_public_key.clone(),
+    );
+
+    // Test 4: valid signature
+    signer_nonce += 1;
+    let signature = make_signer_key_signature(&stacker_principal, &signer_key, reward_cycle);
+    let valid_nonce = signer_nonce;
+    let valid_tx = make_pox_4_delegate_stack_stx(
+        &signer_key,
+        signer_nonce,
+        stacker_principal.clone(),
+        min_ustx,
+        pox_addr,
+        block_height.into(),
+        lock_period,
+        signature,
+        signer_public_key.clone(),
+    );
+
+    peer.tenure_with_txs(
+        &[
+            delegate_stx,
+            invalid_cycle_stack,
+            invalid_stacker_tx,
+            invalid_key_tx,
+            valid_tx,
+        ],
+        &mut coinbase_nonce,
+    );
+
+    let expected_error = Value::error(Value::Int(35)).unwrap();
+
+    let signer_txs = get_last_block_sender_transactions(&observer, signer_addr);
+
+    assert_eq!(signer_txs.len(), (valid_nonce + 1) as usize);
+    let tx_result =
+        |nonce: u64| -> Value { signer_txs.get(nonce as usize).unwrap().result.clone() };
+    assert_eq!(tx_result(invalid_cycle_nonce), expected_error);
+    assert_eq!(tx_result(invalid_stacker_nonce), expected_error);
+    assert_eq!(tx_result(invalid_key_nonce), expected_error);
+
+    // valid tx should succeed
+    tx_result(valid_nonce).expect_result_ok();
+}
+
+#[test]
+fn stack_extend_verify_sig() {
+    let lock_period = 2;
+    let observer = TestEventObserver::new();
+    let (burnchain, mut peer, keys, latest_block, block_height, coinbase_nonce) =
+        prepare_pox4_test(function_name!(), Some(&observer));
+
+    let mut coinbase_nonce = coinbase_nonce;
+
+    let mut stacker_nonce = 0;
+    let stacker_key = &keys[0];
+    let min_ustx = get_stacking_minimum(&mut peer, &latest_block);
+    let stacker_addr = key_to_stacks_addr(&stacker_key);
+    let stacker = PrincipalData::from(stacker_addr);
+    let signer_key = &keys[1];
+    let signer_public_key = StacksPublicKey::from_private(signer_key);
+    let pox_addr = pox_addr_from(&signer_key);
+
+    let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+
+    // Setup: stack-stx
+    let signature = make_signer_key_signature(&stacker, &signer_key, reward_cycle);
+    let stack_nonce = stacker_nonce;
+    let stack_tx = make_pox_4_lockup(
+        &stacker_key,
+        stacker_nonce,
+        min_ustx,
+        pox_addr.clone(),
+        lock_period,
+        signer_public_key.clone(),
+        block_height,
+        signature,
+    );
+
+    // We need a new signer-key for the extend tx
+    let signer_key = Secp256k1PrivateKey::new();
+    let signer_public_key = StacksPublicKey::from_private(&signer_key);
+
+    // Test 1: invalid reward cycle
+    let signature = make_signer_key_signature(&stacker, &signer_key, reward_cycle - 1);
+    stacker_nonce += 1;
+    let invalid_cycle_nonce = stacker_nonce;
+    let invalid_cycle_tx = make_pox_4_extend(
+        &stacker_key,
+        stacker_nonce,
+        pox_addr.clone(),
+        lock_period,
+        signer_public_key.clone(),
+        signature,
+    );
+
+    // Test 2: invalid stacker
+    stacker_nonce += 1;
+    let other_stacker = PrincipalData::from(key_to_stacks_addr(&Secp256k1PrivateKey::new()));
+    let signature = make_signer_key_signature(&other_stacker, &signer_key, reward_cycle);
+    let invalid_stacker_nonce = stacker_nonce;
+    let invalid_stacker_tx = make_pox_4_extend(
+        &stacker_key,
+        stacker_nonce,
+        pox_addr.clone(),
+        lock_period,
+        signer_public_key.clone(),
+        signature,
+    );
+
+    // Test 3: invalid key used to sign
+    stacker_nonce += 1;
+    let other_key = Secp256k1PrivateKey::new();
+    let signature = make_signer_key_signature(&stacker, &other_key, reward_cycle);
+    let invalid_key_nonce = stacker_nonce;
+    let invalid_key_tx = make_pox_4_extend(
+        &stacker_key,
+        stacker_nonce,
+        pox_addr.clone(),
+        lock_period,
+        signer_public_key.clone(),
+        signature,
+    );
+
+    // Test 4: valid stack-extend
+    stacker_nonce += 1;
+    let signature = make_signer_key_signature(&stacker, &signer_key, reward_cycle);
+    let valid_nonce = stacker_nonce;
+    let valid_tx = make_pox_4_extend(
+        &stacker_key,
+        stacker_nonce,
+        pox_addr,
+        lock_period,
+        signer_public_key.clone(),
+        signature,
+    );
+
+    peer.tenure_with_txs(
+        &[
+            stack_tx,
+            invalid_cycle_tx,
+            invalid_stacker_tx,
+            invalid_key_tx,
+            valid_tx,
+        ],
+        &mut coinbase_nonce,
+    );
+
+    let stacker_txs = get_last_block_sender_transactions(&observer, stacker_addr);
+
+    let tx_result =
+        |nonce: u64| -> Value { stacker_txs.get(nonce as usize).unwrap().result.clone() };
+
+    let expected_error = Value::error(Value::Int(35)).unwrap();
+    tx_result(stack_nonce).expect_result_ok();
+    assert_eq!(tx_result(invalid_cycle_nonce), expected_error);
+    assert_eq!(tx_result(invalid_stacker_nonce), expected_error);
+    assert_eq!(tx_result(invalid_key_nonce), expected_error);
+    tx_result(valid_nonce).expect_result_ok();
+}
+
+#[test]
+fn delegate_stack_stx_extend_verify_sig() {
+    let lock_period = 2;
+    let observer = TestEventObserver::new();
+    let (burnchain, mut peer, keys, latest_block, block_height, coinbase_nonce) =
+        prepare_pox4_test(function_name!(), Some(&observer));
+
+    let mut coinbase_nonce = coinbase_nonce;
+
+    let mut signer_nonce = 0;
+    let signer_key = &keys[0];
+    let min_ustx = get_stacking_minimum(&mut peer, &latest_block);
+    let signer_addr = key_to_stacks_addr(&signer_key);
+    let signer_principal = PrincipalData::from(signer_addr);
+    let signer_private_key = &keys[1];
+    let signer_public_key = StacksPublicKey::from_private(&signer_private_key);
+    let pox_addr = pox_addr_from(&signer_key);
+
+    let stacker_key = &keys[2];
+    let stacker_addr = key_to_stacks_addr(stacker_key);
+    let stacker_principal = PrincipalData::from(stacker_addr);
+
+    let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
+
+    // Stacker calls `delegate-stx`
+    let delegate_stx =
+        make_pox_4_delegate_stx(&stacker_key, 0, min_ustx, signer_principal, None, None);
+
+    // Signer calls `delegate-stack-stx`
+    let signature =
+        make_signer_key_signature(&stacker_principal, &signer_private_key, reward_cycle);
+    let delegate_stack_nonce = signer_nonce;
+    let delegate_stack_tx = make_pox_4_delegate_stack_stx(
+        &signer_key,
+        signer_nonce,
+        stacker_principal.clone(),
+        min_ustx,
+        pox_addr.clone(),
+        block_height.into(),
+        lock_period,
+        signature,
+        signer_public_key.clone(),
+    );
+
+    // We need a new signer key for uniqueness
+    let signer_private_key = Secp256k1PrivateKey::new();
+    let signer_public_key = StacksPublicKey::from_private(&signer_private_key);
+
+    // Now we're testing `delegate-stack-extend`
+
+    // Test 1: invalid reward cycle
+    signer_nonce += 1;
+    let last_reward_cycle = reward_cycle - 1;
+    let signature =
+        make_signer_key_signature(&stacker_principal, &signer_private_key, last_reward_cycle);
+    let invalid_cycle_nonce = signer_nonce;
+    let invalid_cycle_tx = make_pox_4_delegate_stack_extend(
+        &signer_key,
+        signer_nonce,
+        stacker_principal.clone(),
+        pox_addr.clone(),
+        signer_public_key.clone(),
+        1,
+        signature,
+    );
+
+    // Test 2: invalid stacker
+    signer_nonce += 1;
+    let other_stacker = PrincipalData::from(key_to_stacks_addr(&Secp256k1PrivateKey::new()));
+    let signature = make_signer_key_signature(&other_stacker, &signer_private_key, reward_cycle);
+    let invalid_stacker_nonce = signer_nonce;
+    let invalid_stacker_tx = make_pox_4_delegate_stack_extend(
+        &signer_key,
+        signer_nonce,
+        stacker_principal.clone(), // different than in sig
+        pox_addr.clone(),
+        signer_public_key.clone(),
+        1,
+        signature,
+    );
+
+    // Test 3: invalid key used to sign
+    signer_nonce += 1;
+    let other_key = Secp256k1PrivateKey::new();
+    let signature = make_signer_key_signature(&stacker_principal, &other_key, reward_cycle);
+    let invalid_key_nonce = signer_nonce;
+    let invalid_key_tx = make_pox_4_delegate_stack_extend(
+        &signer_key,
+        signer_nonce,
+        stacker_principal.clone(),
+        pox_addr.clone(),
+        signer_public_key.clone(), // different key than used to sign
+        1,
+        signature,
+    );
+
+    // Test 4: valid delegate-stack-extend
+    signer_nonce += 1;
+    let signature =
+        make_signer_key_signature(&stacker_principal, &signer_private_key, reward_cycle);
+    let valid_nonce = signer_nonce;
+    let valid_tx = make_pox_4_delegate_stack_extend(
+        &signer_key,
+        signer_nonce,
+        stacker_principal.clone(),
+        pox_addr,
+        signer_public_key.clone(),
+        1,
+        signature,
+    );
+
+    peer.tenure_with_txs(
+        &[
+            delegate_stx,
+            delegate_stack_tx,
+            invalid_cycle_tx,
+            invalid_stacker_tx,
+            invalid_key_tx,
+            valid_tx,
+        ],
+        &mut coinbase_nonce,
+    );
+
+    let signer_txs = get_last_block_sender_transactions(&observer, signer_addr);
+
+    assert_eq!(signer_txs.len(), (valid_nonce + 1) as usize);
+
+    let tx_result =
+        |nonce: u64| -> Value { signer_txs.get(nonce as usize).unwrap().result.clone() };
+
+    let expected_error = Value::error(Value::Int(35)).unwrap();
+
+    tx_result(delegate_stack_nonce).expect_result_ok(); // delegate-stack-stx setup
+
+    // failed delegate-stack-extend
+    assert_eq!(tx_result(invalid_cycle_nonce), expected_error);
+    assert_eq!(tx_result(invalid_stacker_nonce), expected_error);
+    assert_eq!(tx_result(invalid_key_nonce), expected_error);
+
+    // valid delegate-stack-extend
+    tx_result(valid_nonce).expect_result_ok();
 }
 
 fn assert_latest_was_burn(peer: &mut TestPeer) {
