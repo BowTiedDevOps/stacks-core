@@ -21,6 +21,7 @@ pub(crate) mod stacks_client;
 
 use std::time::Duration;
 
+use clarity::vm::errors::Error as ClarityError;
 use clarity::vm::types::serialization::SerializationError;
 use clarity::vm::Value as ClarityValue;
 use libsigner::RPCError;
@@ -69,8 +70,11 @@ pub enum ClientError {
     /// Failed to serialize a Clarity value
     #[error("Failed to serialize Clarity value: {0}")]
     ClaritySerializationError(#[from] SerializationError),
+    /// Clarity error occurred
+    #[error("Clarity error occurred: {0}")]
+    ClarityError(#[from] ClarityError),
     /// Failed to parse a Clarity value
-    #[error("Recieved a malformed clarity value: {0}")]
+    #[error("Received a malformed clarity value: {0}")]
     MalformedClarityValue(ClarityValue),
     /// Invalid Clarity Name
     #[error("Invalid Clarity Name: {0}")]

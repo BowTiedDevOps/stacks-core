@@ -24,14 +24,14 @@ use blockstack_lib::chainstate::stacks::{
 use blockstack_lib::net::api::callreadonly::CallReadOnlyResponse;
 use blockstack_lib::net::api::getpoxinfo::RPCPoxInfoData;
 use blockstack_lib::net::api::postblock_proposal::NakamotoBlockProposal;
-use blockstack_lib::util_lib::boot::boot_code_id;
+use blockstack_lib::util_lib::boot::{boot_code_addr, boot_code_id};
 use clarity::vm::{ClarityName, ContractName, Value as ClarityValue};
 use serde_json::json;
-use slog::slog_debug;
+use slog::{slog_debug, slog_warn};
 use stacks_common::codec::StacksMessageCodec;
 use stacks_common::consts::CHAIN_ID_MAINNET;
-use stacks_common::debug;
 use stacks_common::types::chainstate::{StacksAddress, StacksPrivateKey, StacksPublicKey};
+use stacks_common::{debug, warn};
 use wsts::curve::point::{Compressed, Point};
 
 use crate::client::{retry_with_exponential_backoff, ClientError};
@@ -51,6 +51,8 @@ pub struct StacksClient {
     chain_id: u32,
     /// The Client used to make HTTP connects
     stacks_node_client: reqwest::blocking::Client,
+    /// The stx transaction fee to use in microstacks
+    tx_fee: u64,
 }
 
 impl From<&Config> for StacksClient {
@@ -62,6 +64,7 @@ impl From<&Config> for StacksClient {
             tx_version: config.network.to_transaction_version(),
             chain_id: config.network.to_chain_id(),
             stacks_node_client: reqwest::blocking::Client::new(),
+            tx_fee: config.tx_fee,
         }
     }
 }
@@ -118,6 +121,30 @@ impl StacksClient {
             return Err(ClientError::RequestFailure(response.status()));
         }
         Ok(())
+    }
+
+    /// cast for for aggregate public key
+    pub fn cast_aggregate_public_key_vote(
+        &self,
+        point: Point,
+        round: u64,
+    ) -> Result<Txid, ClientError> {
+        if true {
+            warn!("Not currently supporting casting votes for aggregate public keys. Pox 4 has not enabled it yet");
+            return Ok(Txid([0; 32]));
+        }
+        let reward_cycle = self.get_current_reward_cycle()?;
+        let reward_cycle_value = ClarityValue::UInt(reward_cycle as u128);
+        let aggregate_public_key = ClarityValue::buff_from(point.compress().as_bytes().to_vec())?;
+        let round_value = ClarityValue::UInt(round as u128);
+
+        let contract_addr = boot_code_addr(self.chain_id == CHAIN_ID_MAINNET);
+        let contract_name = ContractName::from(POX_4_NAME); // TODO: update this to POX_4_VOTE_NAME when the contract is deployed
+        let function_name_str = "vote-for-aggregate-public-key";
+        let function_name = ClarityName::try_from(function_name_str)
+            .map_err(|_| ClientError::InvalidClarityName(function_name_str.to_string()))?;
+        let function_args = &[reward_cycle_value, aggregate_public_key, round_value];
+        self.transaction_contract_call(&contract_addr, contract_name, function_name, function_args)
     }
 
     /// Retrieve the current DKG aggregate public key
@@ -189,7 +216,6 @@ impl StacksClient {
     }
 
     /// Sends a transaction to the stacks node for a modifying contract call
-    #[allow(dead_code)]
     fn transaction_contract_call(
         &self,
         contract_addr: &StacksAddress,
@@ -236,7 +262,7 @@ impl StacksClient {
         // FIXME: Because signers are given priority, we can put down a tx fee of 0
         // https://github.com/stacks-network/stacks-blockchain/issues/4006
         // Note: if set to 0 now, will cause a failure (MemPoolRejection::FeeTooLow)
-        unsigned_tx.set_tx_fee(10_000);
+        unsigned_tx.set_tx_fee(self.tx_fee);
         unsigned_tx.set_origin_nonce(self.get_next_possible_nonce()?);
 
         unsigned_tx.anchor_mode = TransactionAnchorMode::Any;

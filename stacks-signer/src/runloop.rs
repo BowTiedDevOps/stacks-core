@@ -551,8 +551,22 @@ impl<C: Coordinator> RunLoop<C> {
                 OperationResult::SignTaproot(_) => {
                     debug!("Received a signature result for a taproot signature. Nothing to broadcast as we currently sign blocks with a FROST signature.");
                 }
-                OperationResult::Dkg(_point) => {
-                    // TODO: cast the aggregate public key for the latest round here
+                OperationResult::Dkg(point) => {
+                    //TODO: track the round number and broadcast the aggregate public key for the latest round
+                    match self
+                        .stacks_client
+                        .cast_aggregate_public_key_vote(point.clone(), 0)
+                    {
+                        Ok(txid) => {
+                            // TODO: remove this check once we have POX 4 cast aggregate public key vote changes
+                            if txid != Txid([0; 32]) {
+                                self.transactions.push(txid);
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to cast aggregate public key vote: {:?}", e);
+                        }
+                    }
                 }
                 OperationResult::SignError(e) => {
                     self.process_sign_error(e);
