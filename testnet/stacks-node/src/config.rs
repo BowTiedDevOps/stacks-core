@@ -1934,6 +1934,10 @@ pub struct MinerConfig {
     pub self_signing_key: Option<SelfSigner>,
     /// Amount of time while mining in nakamoto to wait in between mining interim blocks
     pub wait_on_interim_blocks: Duration,
+    /// Amount of time while mining in nakamoto to wait for signers to respond to a proposed block
+    pub wait_on_signers: Duration,
+    /// The number of rejections as a percentage for a block to receive from signers before proposing a new block
+    pub signer_rejection_threshold: usize,
 }
 
 impl Default for MinerConfig {
@@ -1953,6 +1957,9 @@ impl Default for MinerConfig {
             mining_key: None,
             self_signing_key: None,
             wait_on_interim_blocks: Duration::from_millis(2_500),
+            // TODO: update to a sane value based on stackerdb benchmarking
+            wait_on_signers: Duration::from_millis(10_000),
+            signer_rejection_threshold: 30,
         }
     }
 }
@@ -2267,6 +2274,8 @@ pub struct MinerConfigFile {
     pub mining_key: Option<String>,
     pub self_signing_seed: Option<u64>,
     pub wait_on_interim_blocks_ms: Option<u64>,
+    pub wait_on_signers_ms: Option<u64>,
+    pub signer_rection_threshold: Option<usize>,
 }
 
 impl MinerConfigFile {
@@ -2320,6 +2329,14 @@ impl MinerConfigFile {
                 .wait_on_interim_blocks_ms
                 .map(Duration::from_millis)
                 .unwrap_or(miner_default_config.wait_on_interim_blocks),
+            wait_on_signers: self
+                .wait_on_signers_ms
+                .map(Duration::from_millis)
+                .unwrap_or(miner_default_config.wait_on_signers),
+            signer_rejection_threshold: self
+                .signer_rection_threshold
+                .map(|threshold| std::cmp::min(threshold, 100))
+                .unwrap_or(miner_default_config.signer_rejection_threshold),
         })
     }
 }
