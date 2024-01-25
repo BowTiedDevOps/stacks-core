@@ -1394,8 +1394,8 @@ fn verify_signer_key_sig(
                             let program = format!(
                                 "(verify-signer-key-sig '{} 0x{} 0x{})",
                                 stacker.to_string(),
-                                signing_key.to_hex(),
                                 to_hex(&signature),
+                                signing_key.to_hex(),
                             );
                             env.eval_read_only(&boot_code_id("pox-4", false), &program)
                         },

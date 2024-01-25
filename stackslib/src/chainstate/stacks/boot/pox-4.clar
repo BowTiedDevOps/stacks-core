@@ -30,7 +30,8 @@
 (define-constant ERR_INVALID_SIGNER_KEY 32)
 (define-constant ERR_REUSED_SIGNER_KEY 33)
 (define-constant ERR_DELEGATION_ALREADY_REVOKED 34)
-(define-constant ERR_DELEGATION_INVALID_SIGNATURE (err 35))
+(define-constant ERR_INVALID_SIGNATURE_PUBKEY 35)
+(define-constant ERR_INVALID_SIGNATURE_RECOVER 36)
 
 ;; Valid values for burnchain address versions.
 ;; These first four correspond to address hash modes in Stacks 2.1,
@@ -198,7 +199,7 @@
 ;; partial-stacked-by-cycle right after it was deleted (so, subsequent calls
 ;; to the `stack-aggregation-*` functions will overwrite this).
 (define-map logged-partial-stacked-by-cycle
-    { 
+    {
         pox-addr: { version: (buff 1), hashbytes: (buff 32) },
         reward-cycle: uint,
         sender: principal
@@ -600,7 +601,7 @@
         (err ERR_STACKING_INSUFFICIENT_FUNDS))
 
       ;; Validate ownership of the given signer key
-      (try! (verify-signer-key-sig tx-sender signer-key signer-sig))
+      (try! (verify-signer-key-sig tx-sender signer-sig signer-key))
 
       ;; ensure that stacking can be performed
       (try! (can-stack-stx pox-addr amount-ustx first-reward-cycle lock-period))
@@ -646,7 +647,7 @@
                              (delegate-to principal)
                              (until-burn-ht (optional uint))
                              (pox-addr (optional { version: (buff 1), hashbytes: (buff 32) })))
-                             
+
     (begin
       ;; must be called directly by the tx-sender or by an allowed contract-caller
       (asserts! (check-caller-allowed)
@@ -683,13 +684,13 @@
 
 ;; Generate a message hash for validating a signer key.
 ;; The message hash follows SIP018 for signing structured data. The structured data
-;; is the tuple `{ stacker, reward-cycle }`. The domain is 
+;; is the tuple `{ stacker, reward-cycle }`. The domain is
 ;; `{ name: "pox-4-signer", version: "1.0.0", chain-id: chain-id }`.
 (define-read-only (get-signer-key-message-hash (stacker principal))
   (let
     (
       (domain { name: "pox-4-signer", version: "1.0.0", chain-id: chain-id })
-      (data-hash (sha256 (unwrap-panic 
+      (data-hash (sha256 (unwrap-panic
         (to-consensus-buff? { stacker: stacker, reward-cycle: (current-pox-reward-cycle) }))))
       (domain-hash (sha256 (unwrap-panic (to-consensus-buff? domain))))
     )
@@ -702,21 +703,21 @@
 
 ;; Verify a signature from the signing key for this specific stacker.
 ;; See `get-signer-key-message-hash` for details on the message hash.
-;; 
+;;
 ;; Note that `reward-cycle` corresponds to the _current_ reward cycle,
 ;; not the reward cycle at which the delegation will start.
 ;; The public key is recovered from the signature and compared to `signer-key`.
 (define-read-only (verify-signer-key-sig (stacker principal)
-                                                (signer-key (buff 33))
-                                                (signer-sig (buff 65)))
+                                         (signer-sig (buff 65))
+                                         (signer-key (buff 33)))
   (let
     (
       (msg-hash (get-signer-key-message-hash stacker))
-      (pubkey (unwrap! (secp256k1-recover? msg-hash signer-sig) ERR_DELEGATION_INVALID_SIGNATURE)) ;; TODO
+      (pubkey (unwrap! (secp256k1-recover? msg-hash signer-sig) (err ERR_INVALID_SIGNATURE_RECOVER)))
     )
-    (asserts! (is-eq pubkey signer-key) ERR_DELEGATION_INVALID_SIGNATURE)
+    (asserts! (is-eq pubkey signer-key) (err ERR_INVALID_SIGNATURE_PUBKEY))
     (ok true)
-  )                                            
+  )
 )
 
 ;; Commit partially stacked STX and allocate a new PoX reward address slot.
@@ -879,7 +880,7 @@
         (err ERR_STACKING_PERMISSION_DENIED))
 
       ;; Verify signature from delegate that allows this sender for this cycle
-      (try! (verify-signer-key-sig stacker signer-key signer-sig))
+      (try! (verify-signer-key-sig stacker signer-sig signer-key))
 
       ;; stacker must have delegated to the caller
       (let ((delegation-info (unwrap! (get-check-delegation stacker) (err ERR_STACKING_PERMISSION_DENIED))))
@@ -1060,7 +1061,7 @@
               (err ERR_STACKING_IS_DELEGATED))
 
     ;; Verify signature from delegate that allows this sender for this cycle
-    (try! (verify-signer-key-sig tx-sender signer-key signer-sig))
+    (try! (verify-signer-key-sig tx-sender signer-sig signer-key))
 
     ;; ensure the signer key can be used
     (try! (insert-signer-key signer-key))
@@ -1250,7 +1251,7 @@
                 (err ERR_STACKING_NOT_DELEGATED))
 
       ;; Validate that the owner of the signing key is allowing this stacker
-      (try! (verify-signer-key-sig stacker signer-key signer-sig))
+      (try! (verify-signer-key-sig stacker signer-sig signer-key))
 
       ;; stacker must be delegated to tx-sender
       (asserts! (is-eq (unwrap! (get delegated-to stacker-state)
