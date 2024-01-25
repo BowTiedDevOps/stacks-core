@@ -1245,7 +1245,6 @@ fn pox_4_revoke_delegate_stx_events() {
     let bob = keys.pop().unwrap();
     let bob_address = key_to_stacks_addr(&bob);
     let bob_principal = PrincipalData::from(bob_address.clone());
-    let bob_pox_addr = make_pox_addr(AddressHashMode::SerializeP2PKH, bob_address.bytes.clone());
 
     let mut alice_nonce = 0;
 
@@ -1263,7 +1262,6 @@ fn pox_4_revoke_delegate_stx_events() {
 
     // alice delegates 100 STX to Bob
     let alice_delegation_amount = 100_000_000;
-    let alice_delegate_nonce = alice_nonce;
     let alice_delegate = make_pox_4_delegate_stx(
         &alice,
         alice_nonce,
@@ -1271,7 +1269,6 @@ fn pox_4_revoke_delegate_stx_events() {
         bob_principal,
         None,
         None,
-        // &signature,
     );
     let alice_delegate_nonce = alice_nonce;
     alice_nonce += 1;
@@ -1299,7 +1296,6 @@ fn pox_4_revoke_delegate_stx_events() {
         PrincipalData::from(bob_address.clone()),
         Some(target_height as u128),
         None,
-        // &signature,
     );
     let alice_delegate_2_nonce = alice_nonce;
     alice_nonce += 1;
@@ -1377,42 +1373,11 @@ fn pox_4_revoke_delegate_stx_events() {
     );
 }
 
-fn generate_signer_key_sig_msg_hash(
-    stacker: &PrincipalData,
-    signer_key: &Secp256k1PrivateKey,
-    reward_cycle: u128,
-) -> Sha256Sum {
-    let domain_tuple = Value::Tuple(
-        TupleData::from_data(vec![
-            (
-                "name".into(),
-                Value::string_ascii_from_bytes("pox-4-signer".into()).unwrap(),
-            ),
-            (
-                "version".into(),
-                Value::string_ascii_from_bytes("1.0.0".into()).unwrap(),
-            ),
-            ("chain-id".into(), Value::UInt(CHAIN_ID_TESTNET.into())),
-        ])
-        .unwrap(),
-    );
-    let data_tuple = Value::Tuple(
-        TupleData::from_data(vec![
-            ("stacker".into(), Value::Principal(stacker.clone())),
-            ("reward-cycle".into(), Value::UInt(reward_cycle)),
-        ])
-        .unwrap(),
-    );
-
-    structured_data_message_hash(data_tuple, domain_tuple)
-}
-
 fn verify_signer_key_sig(
     signature: &Vec<u8>,
     signing_key: &Secp256k1PublicKey,
     stacker: &PrincipalData,
     peer: &mut TestPeer,
-    burnchain: &Burnchain,
     latest_block: &StacksBlockId,
 ) -> Value {
     let result: Value = with_sortdb(peer, |ref mut chainstate, ref mut sortdb| {
@@ -1475,7 +1440,6 @@ fn verify_signer_key_signatures() {
     let bob = keys.pop().unwrap();
     let bob_address = key_to_stacks_addr(&bob);
     let bob_principal = PrincipalData::from(bob_address.clone());
-    let bob_pox_addr = make_pox_addr(AddressHashMode::SerializeP2PKH, bob_address.bytes.clone());
     let bob_public_key = StacksPublicKey::from_private(&bob);
 
     // Advance into pox4
@@ -1501,7 +1465,6 @@ fn verify_signer_key_signatures() {
         &bob_public_key,
         &alice_principal,
         &mut peer,
-        &burnchain,
         &latest_block,
     );
     assert_eq!(result, expected_error);
@@ -1515,7 +1478,6 @@ fn verify_signer_key_signatures() {
         &bob_public_key,
         &alice_principal, // different stacker
         &mut peer,
-        &burnchain,
         &latest_block,
     );
 
@@ -1530,7 +1492,6 @@ fn verify_signer_key_signatures() {
         &bob_public_key, // different key
         &alice_principal,
         &mut peer,
-        &burnchain,
         &latest_block,
     );
 
@@ -1545,7 +1506,6 @@ fn verify_signer_key_signatures() {
         &bob_public_key,
         &alice_principal,
         &mut peer,
-        &burnchain,
         &latest_block,
     );
 
@@ -1626,7 +1586,6 @@ fn balances_from_keys(
 
 #[test]
 fn stack_stx_signer_key() {
-    let lock_period = 2;
     let (burnchain, mut peer, keys, latest_block, block_height, mut coinbase_nonce) =
         prepare_pox4_test(function_name!(), None);
 
@@ -1647,11 +1606,6 @@ fn stack_stx_signer_key() {
     //                       (start-burn-ht uint)
     //                       (lock-period uint)
     //                       (signer-key (buff 33)))
-    // let pox_addr = make_pox_addr(
-    //     AddressHashMode::SerializeP2WSH,
-    //     key_to_stacks_addr(stacker_key).bytes,
-    // );
-    let pox_addr = pox_addr_from(signer_key);
     let txs = vec![make_pox_4_lockup(
         &stacker_key,
         stacker_nonce,
@@ -1690,22 +1644,16 @@ fn stack_stx_signer_key_no_reuse() {
     let second_stacker_address = key_to_stacks_addr(second_stacker_key);
     let min_ustx = get_stacking_minimum(&mut peer, &latest_block);
 
-    let pox_addr = make_pox_addr(
-        AddressHashMode::SerializeP2WSH,
-        key_to_stacks_addr(first_stacker_key).bytes,
-    );
     let first_stacker = PrincipalData::from(key_to_stacks_addr(first_stacker_key));
     let second_stacker = PrincipalData::from(key_to_stacks_addr(second_stacker_key));
     let signer_key = &keys[2];
     let signer_public_key = StacksPublicKey::from_private(signer_key);
-    let signer_key_val = Value::buff_from(signer_public_key.to_bytes_compressed()).unwrap();
 
     let reward_cycle = get_current_reward_cycle(&peer, &burnchain);
 
     let first_signature = make_signer_key_signature(&first_stacker, &signer_key, reward_cycle);
     let second_signature = make_signer_key_signature(&second_stacker, &signer_key, reward_cycle);
 
-    let signature_val = Value::buff_from(first_signature.clone()).unwrap();
     let txs = vec![
         make_pox_4_lockup(
             &first_stacker_key,
@@ -1924,7 +1872,6 @@ fn delegate_stack_stx_extend_signer_key() {
 
     let mut alice_nonce = 0;
     let alice_stacker_key = &keys[0];
-    let alice_principal = PrincipalData::from(key_to_stacks_addr(alice_stacker_key));
     let bob_nonce = 0;
     let bob_delegate_private_key = &keys[1];
     let bob_delegate_principal = PrincipalData::from(key_to_stacks_addr(bob_delegate_private_key));
