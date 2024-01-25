@@ -1853,8 +1853,9 @@ pub mod test {
     pub fn make_pox_4_vote_for_aggregate_public_key(
         key: &StacksPrivateKey,
         nonce: u64,
-        reward_cycle: u128,
         aggregate_public_key: &Point,
+        reward_cycle: u128,
+        round: u128
     ) -> StacksTransaction {
         let aggregate_public_key = Value::buff_from(aggregate_public_key.compress().data.to_vec())
             .expect("Failed to serialize aggregate public key");
@@ -1864,18 +1865,8 @@ pub mod test {
             "vote-for-aggregate-public-key",
             vec![
                 aggregate_public_key,
-                Value::UInt(reward_cycle as u128),
-                Value::UInt(0),
-                Value::Sequence(SequenceData::List(ListData {
-                    data: [].to_vec(),
-                    type_signature: ListTypeData::new_list(
-                        TypeSignature::SequenceType(SequenceSubtype::BufferType(
-                            BufferLength::try_from(33u32).unwrap(),
-                        )),
-                        4001,
-                    )
-                    .unwrap(),
-                })),
+                Value::UInt(reward_cycle),
+                Value::UInt(round),
             ],
         )
         .unwrap();

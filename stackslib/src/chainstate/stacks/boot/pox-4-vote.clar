@@ -48,7 +48,7 @@
         when (is-eq when dkg-id)
         true))
 
-(define-public (vote-for-aggregate-public-key (key (buff 33)) (reward-cycle uint) (round uint) (tapleaves (list 4001 (buff 33))))
+(define-public (vote-for-aggregate-public-key (key (buff 33)) (reward-cycle uint) (round uint))
     (let ((tally-key {reward-cycle: reward-cycle, round: round, aggregate-public-key: key})
             ;; one slot, one vote
             (num-slots (unwrap! (get-signer-slots tx-sender reward-cycle) err-not-allowed))

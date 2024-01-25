@@ -157,8 +157,9 @@ fn vote_for_aggregate_public_key() {
     let txs = vec![make_pox_4_vote_for_aggregate_public_key(
         signer_key,
         signer_nonce,
-        cycle_id,
         &aggregated_public_key,
+        cycle_id,
+        0,
     )];
 
     let latest_block_id = peer.tenure_with_txs(&txs, &mut coinbase_nonce);
@@ -178,8 +179,9 @@ fn vote_for_aggregate_public_key() {
     let txs = vec![make_pox_4_vote_for_aggregate_public_key(
         signer_key,
         signer_nonce,
-        cycle_id,
         &aggregated_public_key,
+        cycle_id,
+        0,
     )];
 
     let latest_block_id = peer.tenure_with_txs(&txs, &mut coinbase_nonce);
@@ -199,8 +201,9 @@ fn vote_for_aggregate_public_key() {
     let txs = vec![make_pox_4_vote_for_aggregate_public_key(
         signer_key,
         signer_nonce,
-        cycle_id - 1,
         &aggregated_public_key,
+        cycle_id - 1,
+        0,
     )];
 
     let latest_block_id = peer.tenure_with_txs(&txs, &mut coinbase_nonce);
