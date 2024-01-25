@@ -372,62 +372,6 @@ pub fn boot_to_epoch_3(
     )
     .unwrap();
     let reward_cycle = 7 as u128;
-    // let reward_cycle = &btc_regtest_controller
-    //     .get_burnchain()
-    //     .block_height_to_reward_cycle(
-    //         btc_regtest_controller
-    //             .get_chain_tip()
-    //             .block_snapshot
-    //             .block_height,
-    //     )
-    //     .unwrap();
-
-    println!(
-        "Think reward cycle is {}. Epoch 3 is {}",
-        btc_regtest_controller
-            .get_chain_tip()
-            .block_snapshot
-            .block_height,
-        epoch_3.start_height
-    );
-    // let signature = {
-    //     let domain_tuple = clarity::vm::Value::Tuple(
-    //         clarity::vm::types::TupleData::from_data(vec![
-    //             (
-    //                 "name".into(),
-    //                 clarity::vm::Value::string_ascii_from_bytes("pox-4-signer".into()).unwrap(),
-    //             ),
-    //             (
-    //                 "version".into(),
-    //                 clarity::vm::Value::string_ascii_from_bytes("1.0.0".into()).unwrap(),
-    //             ),
-    //             (
-    //                 "chain-id".into(),
-    //                 clarity::vm::Value::UInt(stacks_common::consts::CHAIN_ID_TESTNET.into()),
-    //             ),
-    //         ])
-    //         .unwrap(),
-    //     );
-
-    //     let data_tuple = clarity::vm::Value::Tuple(
-    //         clarity::vm::types::TupleData::from_data(vec![
-    //             (
-    //                 "stacker".into(),
-    //                 clarity::vm::Value::Principal(PrincipalData::from(stacker.clone())),
-    //             ),
-    //             (
-    //                 "reward-cycle".into(),
-    //                 clarity::vm::Value::UInt(reward_cycle.clone() as u128),
-    //             ),
-    //         ])
-    //         .unwrap(),
-    //     );
-
-    //     let signature = sign_structured_data(data_tuple, domain_tuple, &signer_pk).unwrap();
-
-    //     signature.to_rsv()
-    // };
-
     let signature = make_signer_key_signature(
         &PrincipalData::from(stacker.clone()),
         &signer_pk,
