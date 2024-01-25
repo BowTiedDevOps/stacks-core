@@ -67,6 +67,9 @@
 ;; Stacking thresholds
 (define-constant STACKING_THRESHOLD_25 (if is-in-mainnet u20000 u8000))
 
+;; SIP18 message prefix
+(define-constant SIP018_MSG_PREFIX 0x534950303138)
+
 ;; Data vars that store a copy of the burnchain configuration.
 ;; Implemented as data-vars, so that different configurations can be
 ;; used in e.g. test harnesses.
@@ -691,7 +694,7 @@
       (domain-hash (sha256 (unwrap-panic (to-consensus-buff? domain))))
     )
     (sha256 (concat
-      0x534950303138
+      SIP018_MSG_PREFIX
       (concat domain-hash
       data-hash)))
   )
