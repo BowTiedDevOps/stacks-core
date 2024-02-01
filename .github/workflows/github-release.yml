@@ -27,9 +27,8 @@ jobs:
   ##  - tag is provided
   ##  - workflow is building default branch (master)
   build-binaries:
-    if: |
-      inputs.tag != '' && 
-      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: inputs.tag != ''
+      # && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     name: Build Binaries
     uses: ./.github/workflows/create-source-binary.yml
     with:

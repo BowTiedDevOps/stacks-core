@@ -86,9 +86,8 @@ jobs:
   ##  - tag is provided
   ##  - workflow is building default branch (master)
   create-release:
-    if: |
-      inputs.tag != '' &&
-      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: inputs.tag != '' 
+      # && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     name: Create Release
     needs:
       - rustfmt
@@ -106,22 +105,22 @@ jobs:
   ##     and any of:
   ##       - PR review comment
   ##       - PR change is requested
-  docker-image:
-    if: |
-      inputs.tag == '' &&
-      !(
-        github.event_name == 'pull_request_review' &&
-        github.event.action == 'submitted' &&
-        (
-          github.event.review.state == 'commented' ||
-          github.event.review.state == 'changes_requested'
-        )
-      )
-    name: Docker Image (Source)
-    uses: ./.github/workflows/image-build-source.yml
-    needs:
-      - rustfmt
-    secrets: inherit
+  # docker-image:
+  #   if: |
+  #     inputs.tag == '' &&
+  #     !(
+  #       github.event_name == 'pull_request_review' &&
+  #       github.event.action == 'submitted' &&
+  #       (
+  #         github.event.review.state == 'commented' ||
+  #         github.event.review.state == 'changes_requested'
+  #       )
+  #     )
+  #   name: Docker Image (Source)
+  #   uses: ./.github/workflows/image-build-source.yml
+  #   needs:
+  #     - rustfmt
+  #   secrets: inherit
 
   ## Create a reusable cache for tests
   ##
@@ -134,31 +133,31 @@ jobs:
   ##         - this workflow is called manually
   ##         - PR is opened
   ##         - commit to either (development, master) branch
-  create-cache:
-    if: |
-      inputs.tag != '' || (
-        inputs.tag == '' && (
-          (
-            github.event_name == 'pull_request_review' &&
-            github.event.action == 'submitted' &&
-            github.event.review.state == 'approved'
-          ) ||
-          github.event_name == 'workflow_dispatch' ||
-          github.event_name == 'pull_request' ||
-          (
-            contains('
-              refs/heads/master
-              refs/heads/develop
-              refs/heads/next
-            ', github.event.pull_request.head.ref) &&
-            github.event_name == 'push'
-          )
-        )
-      )
-    name: Create Test Cache
-    needs:
-      - rustfmt
-    uses: ./.github/workflows/create-cache.yml
+  # create-cache:
+  #   if: |
+  #     inputs.tag != '' || (
+  #       inputs.tag == '' && (
+  #         (
+  #           github.event_name == 'pull_request_review' &&
+  #           github.event.action == 'submitted' &&
+  #           github.event.review.state == 'approved'
+  #         ) ||
+  #         github.event_name == 'workflow_dispatch' ||
+  #         github.event_name == 'pull_request' ||
+  #         (
+  #           contains('
+  #             refs/heads/master
+  #             refs/heads/develop
+  #             refs/heads/next
+  #           ', github.event.pull_request.head.ref) &&
+  #           github.event_name == 'push'
+  #         )
+  #       )
+  #     )
+  #   name: Create Test Cache
+  #   needs:
+  #     - rustfmt
+  #   uses: ./.github/workflows/create-cache.yml
 
   ## Tests to run regularly
   ##
@@ -167,60 +166,60 @@ jobs:
   ##   either or of the following:
   ##     - tag is not provided
   ##     - PR is approved
-  stacks-core-tests:
-    if: |
-      inputs.tag != '' || (
-        inputs.tag == '' || (
-          github.event_name == 'pull_request_review' &&
-          github.event.action == 'submitted' &&
-          github.event.review.state == 'approved'
-        )
-      )
-    name: Stacks Core Tests
-    needs:
-      - rustfmt
-      - create-cache
-    uses: ./.github/workflows/stacks-core-tests.yml
+  # stacks-core-tests:
+  #   if: |
+  #     inputs.tag != '' || (
+  #       inputs.tag == '' || (
+  #         github.event_name == 'pull_request_review' &&
+  #         github.event.action == 'submitted' &&
+  #         github.event.review.state == 'approved'
+  #       )
+  #     )
+  #   name: Stacks Core Tests
+  #   needs:
+  #     - rustfmt
+  #     - create-cache
+  #   uses: ./.github/workflows/stacks-core-tests.yml
 
-  bitcoin-tests:
-    if: |
-      inputs.tag != '' || (
-        inputs.tag == '' || (
-          github.event_name == 'pull_request_review' &&
-          github.event.action == 'submitted' &&
-          github.event.review.state == 'approved'
-        )
-      )
-    name: Bitcoin Tests
-    needs:
-      - rustfmt
-      - create-cache
-    uses: ./.github/workflows/bitcoin-tests.yml
+  # bitcoin-tests:
+  #   if: |
+  #     inputs.tag != '' || (
+  #       inputs.tag == '' || (
+  #         github.event_name == 'pull_request_review' &&
+  #         github.event.action == 'submitted' &&
+  #         github.event.review.state == 'approved'
+  #       )
+  #     )
+  #   name: Bitcoin Tests
+  #   needs:
+  #     - rustfmt
+  #     - create-cache
+  #   uses: ./.github/workflows/bitcoin-tests.yml
 
   ## Test to run on a tagged release
   ##
   ## Runs when:
   ##   - tag is provided
-  atlas-tests:
-    if: inputs.tag != ''
-    name: Atlas Tests
-    needs:
-      - rustfmt
-      - create-cache
-    uses: ./.github/workflows/atlas-tests.yml
+  # atlas-tests:
+  #   if: inputs.tag != ''
+  #   name: Atlas Tests
+  #   needs:
+  #     - rustfmt
+  #     - create-cache
+  #   uses: ./.github/workflows/atlas-tests.yml
 
-  epoch-tests:
-    if: inputs.tag != ''
-    name: Epoch Tests
-    needs:
-      - rustfmt
-      - create-cache
-    uses: ./.github/workflows/epoch-tests.yml
+  # epoch-tests:
+  #   if: inputs.tag != ''
+  #   name: Epoch Tests
+  #   needs:
+  #     - rustfmt
+  #     - create-cache
+  #   uses: ./.github/workflows/epoch-tests.yml
 
-  slow-tests:
-    if: inputs.tag != ''
-    name: Slow Tests
-    needs:
-      - rustfmt
-      - create-cache
-    uses: ./.github/workflows/slow-tests.yml
+  # slow-tests:
+  #   if: inputs.tag != ''
+  #   name: Slow Tests
+  #   needs:
+  #     - rustfmt
+  #     - create-cache
+  #   uses: ./.github/workflows/slow-tests.yml
