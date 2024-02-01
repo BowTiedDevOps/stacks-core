@@ -86,14 +86,14 @@ jobs:
   ##  - tag is provided
   ##  - workflow is building default branch (master)
   create-release:
-    if: inputs.tag != '' 
+    # if: inputs.tag != '' 
       # && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     name: Create Release
     needs:
       - rustfmt
     uses: ./.github/workflows/github-release.yml
     with:
-      tag: ${{ inputs.tag }}
+      tag: '1.2.3'
     secrets: inherit
 
   ## Build and push Debian image built from source
