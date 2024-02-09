@@ -106,10 +106,12 @@ jobs:
   check-integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
+    if: always()
     needs: integration-tests
     steps:
       ## Print that all tests were successful
-      - name: Print success
-        id: print_success
-        run: |
-          echo "Bitcoin integration tests passed successfully!"
+      - name: Check tests
+        id: check_tests
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
