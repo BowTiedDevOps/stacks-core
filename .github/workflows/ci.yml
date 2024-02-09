@@ -201,26 +201,26 @@ jobs:
   ##
   ## Runs when:
   ##   - tag is provided
-  # atlas-tests:
-  #   if: inputs.tag != ''
-  #   name: Atlas Tests
-  #   needs:
-  #     - rustfmt
-  #     - create-cache
-  #   uses: ./.github/workflows/atlas-tests.yml
+  atlas-tests:
+    if: inputs.tag != ''
+    name: Atlas Tests
+    needs:
+      - rustfmt
+      - create-cache
+    uses: ./.github/workflows/atlas-tests.yml
 
-  # epoch-tests:
-  #   if: inputs.tag != ''
-  #   name: Epoch Tests
-  #   needs:
-  #     - rustfmt
-  #     - create-cache
-  #   uses: ./.github/workflows/epoch-tests.yml
+  epoch-tests:
+    if: inputs.tag != ''
+    name: Epoch Tests
+    needs:
+      - rustfmt
+      - create-cache
+    uses: ./.github/workflows/epoch-tests.yml
 
-  # slow-tests:
-  #   if: inputs.tag != ''
-  #   name: Slow Tests
-  #   needs:
-  #     - rustfmt
-  #     - create-cache
-  #   uses: ./.github/workflows/slow-tests.yml
+  slow-tests:
+    if: inputs.tag != ''
+    name: Slow Tests
+    needs:
+      - rustfmt
+      - create-cache
+    uses: ./.github/workflows/slow-tests.yml
