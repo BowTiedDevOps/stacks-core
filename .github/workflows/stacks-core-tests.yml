@@ -180,3 +180,28 @@ jobs:
         with:
           args: test --manifest-path=./contrib/core-contract-tests/Clarinet.toml contrib/core-contract-tests/tests/bns/name_register_test.ts
 
+  check-full-genesis-tests:
+    name: Check Genesis Tests
+    runs-on: ubuntu-latest
+    if: always()
+    needs: genesis-tests
+    steps:
+      ## Check that all genesis tests were successful
+      - name: Check genesis tests
+        id: check_genesis_tests
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
+
+  check-unit-tests:
+    name: Check Unit Tests
+    runs-on: ubuntu-latest
+    if: always()
+    needs: unit-tests
+    steps:
+      ## Check that all unit tests were successful
+      - name: Check unit tests
+        id: check_unit_tests
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
