@@ -7042,8 +7042,7 @@ fn atlas_integration_test() {
 #[test]
 #[ignore]
 fn antientropy_integration_test() {
-    // commented in order to run tests
-    let a = 1;
+    panic!("Make this test fail");
     if env::var("BITCOIND_TEST") != Ok("1".into()) {
         return;
     }
