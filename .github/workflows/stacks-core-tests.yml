@@ -184,7 +184,7 @@ jobs:
     name: Check Genesis Tests
     runs-on: ubuntu-latest
     if: always()
-    needs: genesis-tests
+    needs: full-genesis
     steps:
       ## Check that all genesis tests were successful
       - name: Check genesis tests
