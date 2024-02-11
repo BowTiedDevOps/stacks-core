@@ -7043,6 +7043,7 @@ fn atlas_integration_test() {
 #[ignore]
 fn antientropy_integration_test() {
     panic!("Make this test fail");
+
     if env::var("BITCOIND_TEST") != Ok("1".into()) {
         return;
     }
