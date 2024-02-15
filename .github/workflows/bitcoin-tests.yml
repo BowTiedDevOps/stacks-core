@@ -120,5 +120,5 @@ jobs:
         id: print_needs
         run: |
           echo "==="
-          echo ${{ toJson(needs) }}
+          echo ${{ needs }}
           echo "==="
