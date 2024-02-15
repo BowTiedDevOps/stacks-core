@@ -123,42 +123,42 @@ jobs:
   #     - rustfmt
   #   secrets: inherit
 
-  ## Create a reusable cache for tests
-  ##
-  ## Runs when:
-  ##   - tag is provided
-  ##   or:
-  ##     - no tag provided
-  ##       and any of:
-  ##         - PR is approved (any approval will trigger)
-  ##         - this workflow is called manually
-  ##         - PR is opened
-  ##         - commit to either (development, master) branch
-  create-cache:
-    if: |
-      inputs.tag != '' || (
-        inputs.tag == '' && (
-          (
-            github.event_name == 'pull_request_review' &&
-            github.event.action == 'submitted' &&
-            github.event.review.state == 'approved'
-          ) ||
-          github.event_name == 'workflow_dispatch' ||
-          github.event_name == 'pull_request' ||
-          (
-            contains('
-              refs/heads/master
-              refs/heads/develop
-              refs/heads/next
-            ', github.event.pull_request.head.ref) &&
-            github.event_name == 'push'
-          )
-        )
-      )
-    name: Create Test Cache
-    needs:
-      - rustfmt
-    uses: ./.github/workflows/create-cache.yml
+  # ## Create a reusable cache for tests
+  # ##
+  # ## Runs when:
+  # ##   - tag is provided
+  # ##   or:
+  # ##     - no tag provided
+  # ##       and any of:
+  # ##         - PR is approved (any approval will trigger)
+  # ##         - this workflow is called manually
+  # ##         - PR is opened
+  # ##         - commit to either (development, master) branch
+  # create-cache:
+  #   if: |
+  #     inputs.tag != '' || (
+  #       inputs.tag == '' && (
+  #         (
+  #           github.event_name == 'pull_request_review' &&
+  #           github.event.action == 'submitted' &&
+  #           github.event.review.state == 'approved'
+  #         ) ||
+  #         github.event_name == 'workflow_dispatch' ||
+  #         github.event_name == 'pull_request' ||
+  #         (
+  #           contains('
+  #             refs/heads/master
+  #             refs/heads/develop
+  #             refs/heads/next
+  #           ', github.event.pull_request.head.ref) &&
+  #           github.event_name == 'push'
+  #         )
+  #       )
+  #     )
+  #   name: Create Test Cache
+  #   needs:
+  #     - rustfmt
+  #   uses: ./.github/workflows/create-cache.yml
 
   # ## Tests to run regularly
   # ##
@@ -194,7 +194,7 @@ jobs:
     name: Bitcoin Tests
     needs:
       - rustfmt
-      - create-cache
+      # - create-cache
     uses: ./.github/workflows/bitcoin-tests.yml
 
   # ## Test to run on a tagged release

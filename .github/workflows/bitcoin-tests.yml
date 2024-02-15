@@ -79,35 +79,59 @@ jobs:
           # - tests::signer::stackerdb_dkg_sign
           # - tests::signer::stackerdb_block_proposal
     steps:
-      ## Setup test environment
-      - name: Setup Test Environment
-        id: setup_tests
-        uses: bowtieddevops/actions/stacks-core/testenv@main
-        with:
-          btc-version: "25.0"
+      # ## Setup test environment
+      # - name: Setup Test Environment
+      #   id: setup_tests
+      #   uses: bowtieddevops/actions/stacks-core/testenv@main
+      #   with:
+      #     btc-version: "25.0"
           
-      ## Run test matrix using restored cache of archive file
-      ##   - Test will timeout after env.TEST_TIMEOUT minutes
-      - name: Run Tests
-        id: run_tests
-        timeout-minutes: ${{ fromJSON(env.TEST_TIMEOUT) }}
-        uses: bowtieddevops/actions/stacks-core/run-tests@main
-        with:
-          test-name: ${{ matrix.test-name }}
-          threads: 1
+      # ## Run test matrix using restored cache of archive file
+      # ##   - Test will timeout after env.TEST_TIMEOUT minutes
+      # - name: Run Tests
+      #   id: run_tests
+      #   timeout-minutes: ${{ fromJSON(env.TEST_TIMEOUT) }}
+      #   uses: bowtieddevops/actions/stacks-core/run-tests@main
+      #   with:
+      #     test-name: ${{ matrix.test-name }}
+      #     threads: 1
 
-      ## Create and upload code coverage file
-      - name: Code Coverage
-        id: codecov
-        uses: bowtieddevops/actions/codecov@main
-        with:
-          test-name: ${{ matrix.test-name }}
+      # ## Create and upload code coverage file
+      # - name: Code Coverage
+      #   id: codecov
+      #   uses: bowtieddevops/actions/codecov@main
+      #   with:
+      #     test-name: ${{ matrix.test-name }}
+
+        - name: Fail 1 job
+          run: |
+            if [[ ${{ matrix.test-name }} == "tests::neon_integrations::antientropy_integration_test" ]]; then
+              exit 1
+            
+  succeeding-job:
+    name: Succeeding job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Job will succeed
+        run: |
+          exit 0
+
+  failing-job:
+    name: Failing job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Job will succeed
+        run: |
+          exit 1
 
   check-integration-tests:
     name: Check Tests
     runs-on: ubuntu-latest
     if: always()
-    needs: integration-tests
+    needs:
+      - integration-tests
+      - succeeding-job
+      - failing-job
     steps:
       ## Check that all tests were successful
       # - name: Check tests
@@ -120,5 +144,5 @@ jobs:
         id: print_needs
         run: |
           echo "==="
-          echo ${{ needs }}
+          jobs=${{ toJson(needs) }}
           echo "==="
