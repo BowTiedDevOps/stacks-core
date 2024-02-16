@@ -147,4 +147,4 @@ jobs:
         with:
           jobs: ${{ toJson(needs) }}
           summary_print: "false"
-          action_name: ${{ github.action }}
+          action_name: ${{ github.workflow }}
