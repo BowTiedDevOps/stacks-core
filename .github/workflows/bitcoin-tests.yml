@@ -145,4 +145,6 @@ jobs:
         id: print_needs
         uses: BowTiedDevOps/actions/check-jobs-status@test/check-given-jobs-successful
         with:
-          jobs: ${{ toJson(needs) }}
+          jobs: ${{ github.workflow }}
+          summary_print: "false"
+          workflow_name: ${{ github.workflow }}
