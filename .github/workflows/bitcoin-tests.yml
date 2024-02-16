@@ -31,10 +31,10 @@ jobs:
         test-name:
           - tests::bitcoin_regtest::bitcoind_integration_test
           - tests::integrations::integration_test_get_info
-          # - tests::neon_integrations::antientropy_integration_test 
+          - tests::neon_integrations::antientropy_integration_test 
           - tests::neon_integrations::bad_microblock_pubkey
           - tests::neon_integrations::bitcoind_forking_test
-          # - tests::neon_integrations::bitcoind_integration_test
+          - tests::neon_integrations::bitcoind_integration_test
           # - tests::neon_integrations::block_large_tx_integration_test
           # - tests::neon_integrations::block_limit_hit_integration_test
           # - tests::neon_integrations::cost_voting_integration
@@ -105,7 +105,7 @@ jobs:
 
         - name: Fail 1 job
           run: |
-            if [[ ${{ matrix.test-name }} == "tests::neon_integrations::antientropy_integration_test" ]]; then
+            if [[ ${{ matrix.test-name }} == "tests::neon_integrations::antientropy_integration_test" || ${{ matrix.test-name }} == "tests::neon_integrations::bitcoind_integration_test" ]]; then
               exit 1
             fi
 
@@ -121,9 +121,9 @@ jobs:
     name: Failing job
     runs-on: ubuntu-latest
     steps:
-      - name: Job will succeed
+      - name: Job will fail
         run: |
-          exit 0
+          exit 1
 
   check-integration-tests:
     name: Check Tests
