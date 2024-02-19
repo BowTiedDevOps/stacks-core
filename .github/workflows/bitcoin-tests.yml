@@ -136,7 +136,7 @@ jobs:
     steps:
       - name: Print needs content
         id: print_needs
-        uses: BowTiedDevOps/actions/check-jobs-status@test/check-given-jobs-successful
+        uses: BowTiedDevOps/actions/check-jobs-status@feat/check-input-jobs-status
         with:
           jobs: ${{ toJson(needs) }}
           summary_print: "true"
