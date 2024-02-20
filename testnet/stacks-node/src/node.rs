@@ -97,6 +97,7 @@ pub struct Node {
 pub fn get_account_lockups(
     use_test_chainstate_data: bool,
 ) -> Box<dyn Iterator<Item = ChainstateAccountLockup>> {
+    let a = 0;
     Box::new(
         stx_genesis::GenesisData::new(use_test_chainstate_data)
             .read_lockups()
