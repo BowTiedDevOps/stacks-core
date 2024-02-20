@@ -112,10 +112,8 @@ jobs:
     steps:
       - name: OpenAPI
         id: openapi
-        uses: stacks-network/actions/openapi@main
-        with:
-          input: ./docs/rpc/openapi.yaml
-          output: ./open-api-docs.html
+        run: |
+          exit 1
 
   ## Disabled
   ##   - this test can take several hours to run

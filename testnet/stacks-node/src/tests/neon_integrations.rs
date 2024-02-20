@@ -4828,6 +4828,7 @@ fn cost_voting_integration() {
 #[test]
 #[ignore]
 fn mining_events_integration_test() {
+    panic!("showcase");
     if env::var("BITCOIND_TEST") != Ok("1".into()) {
         return;
     }
@@ -6839,6 +6840,7 @@ fn atlas_integration_test() {
 #[test]
 #[ignore]
 fn antientropy_integration_test() {
+    panic!("showcase");
     if env::var("BITCOIND_TEST") != Ok("1".into()) {
         return;
     }
