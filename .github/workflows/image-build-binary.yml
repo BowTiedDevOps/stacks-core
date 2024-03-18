@@ -48,7 +48,7 @@ jobs:
     steps:
       ## Setup Docker for the builds
       - name: Docker setup
-        uses: BowTiedDevOps/actions/docker@feat/update-actions-versions
+        uses: BowTiedDevOps/actions/docker@showcase/update-actions-versions
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}

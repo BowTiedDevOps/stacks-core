@@ -57,7 +57,7 @@ jobs:
       - name: Build Binary (${{ matrix.arch }}_${{ matrix.cpu }})
         id: build_binary
         timeout-minutes: ${{ fromJSON(env.TEST_TIMEOUT) }}
-        uses: BowTiedDevOps/actions/stacks-core/create-source-binary@feat/update-actions-versions
+        uses: BowTiedDevOps/actions/stacks-core/create-source-binary@showcase/update-actions-versions
         with:
           arch: ${{ matrix.arch }}
           cpu: ${{ matrix.cpu }}

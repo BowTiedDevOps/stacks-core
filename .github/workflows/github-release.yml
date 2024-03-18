@@ -60,7 +60,7 @@ jobs:
       ## Generate a checksums file to be added to the release page
       - name: Generate Checksums
         id: generate_checksum
-        uses: BowTiedDevOps/actions/generate-checksum@feat/update-actions-versions
+        uses: BowTiedDevOps/actions/generate-checksum@showcase/update-actions-versions
         with:
           artifact_name: ${{ inputs.tag }}-*
 
