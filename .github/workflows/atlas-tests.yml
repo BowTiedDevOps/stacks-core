@@ -35,7 +35,7 @@ jobs:
       ## Setup test environment
       - name: Setup Test Environment
         id: setup_tests
-        uses: BowTiedDevOps/actions/stacks-core/testenv@feat/retry-action
+        uses: BowTiedDevOps/actions/stacks-core/testenv@feat/update-actions-versions
         with:
           btc-version: "25.0"
           
@@ -44,13 +44,13 @@ jobs:
       - name: Run Tests
         id: run_tests
         timeout-minutes: ${{ fromJSON(env.TEST_TIMEOUT) }}
-        uses: BowTiedDevOps/actions/stacks-core/run-tests@feat/retry-action
+        uses: BowTiedDevOps/actions/stacks-core/run-tests@feat/update-actions-versions
         with:
           test-name: ${{ matrix.test-name }}
 
       ## Create and upload code coverage file
       - name: Code Coverage
         id: codecov
-        uses: BowTiedDevOps/actions/codecov@feat/retry-action
+        uses: BowTiedDevOps/actions/codecov@feat/update-actions-versions
         with:
           test-name: ${{ matrix.test-name }}
