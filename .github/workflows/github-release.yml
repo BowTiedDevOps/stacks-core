@@ -53,13 +53,16 @@ jobs:
         id: download_artifacts
         uses: actions/download-artifact@c850b930e6ba138125429b7e5c93fc707a7f8427 # v4.1.4
         with:
-          name: ${{ inputs.tag }}-*
+          pattern: ${{ inputs.tag }}-*
+          merge-multiple: 'true'
           path: release
 
       ## Generate a checksums file to be added to the release page
       - name: Generate Checksums
         id: generate_checksum
         uses: BowTiedDevOps/actions/generate-checksum@feat/update-actions-versions
+        with:
+          artifact_name: ${{ inputs.tag }}-*
 
       ## Upload the release archives with the checksums file
       - name: Upload Release
