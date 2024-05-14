@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - id: check_packages_and_shards
-        uses: stacks-network/actions/stacks-core/mutation-testing/check-packages-and-shards@main
+        uses: BowTiedDevOps/actions/stacks-core/mutation-testing/check-packages-and-shards@test-updated-actions
 
   # Mutation testing - Execute on PR on small packages that have functions modified (normal run, no shards)
   pr-differences-mutants-small-normal:
@@ -49,7 +49,7 @@ jobs:
 
     steps:
       - name: Run mutants on diffs
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: BowTiedDevOps/actions/stacks-core/mutation-testing/pr-differences@test-updated-actions
         with:
           package: 'small'
 
@@ -72,7 +72,7 @@ jobs:
 
     steps:
       - name: Run mutants on diffs
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: BowTiedDevOps/actions/stacks-core/mutation-testing/pr-differences@test-updated-actions
         with:
           shard: ${{ matrix.shard }}
           package: 'small'
@@ -94,7 +94,7 @@ jobs:
         env:
           BITCOIND_TEST: 1
           RUST_BACKTRACE: full
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: BowTiedDevOps/actions/stacks-core/mutation-testing/pr-differences@test-updated-actions
         with:
           package: 'stackslib'
 
@@ -120,7 +120,7 @@ jobs:
         env:
           BITCOIND_TEST: 1
           RUST_BACKTRACE: full
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: BowTiedDevOps/actions/stacks-core/mutation-testing/pr-differences@test-updated-actions
         with:
           shard: ${{ matrix.shard }}
           package: 'stackslib'
@@ -142,7 +142,7 @@ jobs:
         env:
           BITCOIND_TEST: 1
           RUST_BACKTRACE: full
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: BowTiedDevOps/actions/stacks-core/mutation-testing/pr-differences@test-updated-actions
         with:
           package: 'stacks-node'
 
@@ -168,7 +168,7 @@ jobs:
         env:
           BITCOIND_TEST: 1
           RUST_BACKTRACE: full
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: BowTiedDevOps/actions/stacks-core/mutation-testing/pr-differences@test-updated-actions
         with:
           shard: ${{ matrix.shard }}
           package: 'stacks-node'
@@ -186,7 +186,7 @@ jobs:
 
     steps:
       - name: Run mutants on diffs
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: BowTiedDevOps/actions/stacks-core/mutation-testing/pr-differences@test-updated-actions
         with:
           package: 'stacks-signer'
 
@@ -211,7 +211,7 @@ jobs:
 
     steps:
       - name: Output Mutants
-        uses: stacks-network/actions/stacks-core/mutation-testing/output-pr-mutants@main
+        uses: BowTiedDevOps/actions/stacks-core/mutation-testing/output-pr-mutants@test-updated-actions
         with:
           stackslib_package: ${{ needs.check-big-packages-and-shards.outputs.run_stackslib }}
           shards_for_stackslib_package: ${{ needs.check-big-packages-and-shards.outputs.stackslib_with_shards }}

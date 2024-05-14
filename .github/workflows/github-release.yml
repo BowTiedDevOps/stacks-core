@@ -56,7 +56,7 @@ jobs:
       ## Generate a checksums file to be added to the release page
       - name: Generate Checksums
         id: generate_checksum
-        uses: stacks-network/actions/generate-checksum@main
+        uses: BowTiedDevOps/actions/generate-checksum@test-updated-actions
 
       ## Upload the release archives with the checksums file
       - name: Upload Release

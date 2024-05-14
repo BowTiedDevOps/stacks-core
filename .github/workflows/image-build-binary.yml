@@ -43,7 +43,7 @@ jobs:
       ## Setup Docker for the builds
       - name: Docker setup
         id: docker_setup
-        uses: stacks-network/actions/docker@main
+        uses: BowTiedDevOps/actions/docker@test-updated-actions
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}

@@ -95,7 +95,7 @@ jobs:
       ## Setup test environment
       - name: Setup Test Environment
         id: setup_tests
-        uses: stacks-network/actions/stacks-core/testenv@main
+        uses: BowTiedDevOps/actions/stacks-core/testenv@test-updated-actions
         with:
           btc-version: "25.0"
 
@@ -104,7 +104,7 @@ jobs:
       - name: Run Tests
         id: run_tests
         timeout-minutes: ${{ fromJSON(env.TEST_TIMEOUT) }}
-        uses: stacks-network/actions/stacks-core/run-tests@main
+        uses: BowTiedDevOps/actions/stacks-core/run-tests@test-updated-actions
         with:
           test-name: ${{ matrix.test-name }}
           threads: 1
@@ -112,7 +112,7 @@ jobs:
       ## Create and upload code coverage file
       - name: Code Coverage
         id: codecov
-        uses: stacks-network/actions/codecov@main
+        uses: BowTiedDevOps/actions/codecov@test-updated-actions
         with:
           test-name: ${{ matrix.test-name }}
 
@@ -125,7 +125,7 @@ jobs:
     steps:
       - name: Check Tests Status
         id: check_tests_status
-        uses: stacks-network/actions/check-jobs-status@main
+        uses: BowTiedDevOps/actions/check-jobs-status@test-updated-actions
         with:
           jobs: ${{ toJson(needs) }}
           summary_print: "true"

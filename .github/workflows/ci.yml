@@ -61,7 +61,7 @@ jobs:
 
       - name: Rustfmt
         id: rustfmt
-        uses: stacks-network/actions/rustfmt@main
+        uses: BowTiedDevOps/actions/rustfmt@test-updated-actions
         with:
           alias: "fmt-stacks"
 
