@@ -24,10 +24,7 @@ on:
       - reopened
       - synchronize
       - ready_for_review
-  pull_request_target:
-    types: [closed]
-    branches:
-      - 'release/*'
+      - closed
 
 defaults:
   run:
@@ -65,8 +62,9 @@ jobs:
   ##  - tag is provided
   create-release:
     if: |
-      inputs.tag == '' &&
-      github.event.pull_request.merged == true
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/') &&
+      github.event.pull_request.base.ref == 'master'
     name: Create Release
     needs:
       - rustfmt
