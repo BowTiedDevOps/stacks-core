@@ -45,6 +45,10 @@ jobs:
     needs:
       - build-binaries
     steps:
+      - name: Test print
+        run: |
+          echo "Yes fam it reached here gg"
+
       ## Downloads the artifacts built in `create-source-binary.yml`
       - name: Download Artifacts
         id: download_artifacts
