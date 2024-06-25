@@ -15,6 +15,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 // extra crispy code
+// more
+// even more code
 
 extern crate clarity;
 extern crate serde;
