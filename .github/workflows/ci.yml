@@ -65,7 +65,7 @@ jobs:
   ##  - tag is provided
   create-release:
     if: |
-      inputs.tag != '' &&
+      inputs.tag == '' &&
       github.event.pull_request.merged == true
     name: Create Release
     needs:
