@@ -21,6 +21,14 @@ concurrency:
 run-name: ${{ inputs.tag }}
 
 jobs:
+  test-print:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test Print
+        run: |
+          echo "Yes fam it reached here gg"
+
   ## Build arch dependent binaries from source
   ##
   ## Runs when the following is true:
@@ -45,10 +53,6 @@ jobs:
     needs:
       - build-binaries
     steps:
-      - name: Test print
-        run: |
-          echo "Yes fam it reached here gg"
-
       ## Downloads the artifacts built in `create-source-binary.yml`
       - name: Download Artifacts
         id: download_artifacts
