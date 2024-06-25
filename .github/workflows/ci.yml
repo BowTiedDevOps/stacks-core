@@ -50,7 +50,7 @@ jobs:
     steps:
       - name: Rustfmt
         id: rustfmt
-        uses: stacks-network/actions/rustfmt@main
+        uses: BowTiedDevOps/actions/rustfmt@main
         with:
           alias: "fmt-stacks"
 

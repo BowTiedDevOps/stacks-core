@@ -57,7 +57,7 @@ jobs:
       ## Generate a checksums file to be added to the release page
       - name: Generate Checksums
         id: generate_checksum
-        uses: stacks-network/actions/generate-checksum@main
+        uses: BowTiedDevOps/actions/generate-checksum@main
         with:
           artifact_download_pattern: "${{ inputs.tag }}-binary-build-*"
 
