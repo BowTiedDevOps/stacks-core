@@ -24,7 +24,6 @@ on:
       - reopened
       - synchronize
       - ready_for_review
-      - closed
 
 defaults:
   run:
@@ -56,21 +55,45 @@ jobs:
           alias: "fmt-stacks"
 
   ######################################################################################
+  ## Check if the head branch of the PR is a release branch
+  check-release:
+    name: Check Release
+    needs:
+      - rustfmt
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check_release.outputs.tag }}
+      docker_tag: ${{ steps.check_release.outputs.docker_tag }}
+      signer_release: ${{ steps.check_release.outputs.signer_release }}
+    steps:
+      - name: Check Release
+        id: check_release
+        uses: BowTiedDevOps/actions/stacks-core/check-release@main
+        with:
+          tag: ${{ github.event.pull_request.head.ref }}
+
+  ######################################################################################
   ## Create a tagged github release
   ##
   ## Runs when the following is true:
-  ##  - tag is provided
+  ##  - the check-release job outputs a non-empty string for:
+  ##    - the tag
+  ##    - the docker tag
+  ##    - whether it is a signer or a node release
   create-release:
     if: |
-      github.event.pull_request.merged == true &&
-      startsWith(github.event.pull_request.head.ref, 'release/') &&
-      github.event.pull_request.base.ref == 'master'
+      (
+        needs.check-release.outputs.tag != '' &&
+        needs.check-release.outputs.docker_tag != '' &&
+        needs.check-release.outputs.signer_release != ''
+      )
     name: Create Release
     needs:
       - rustfmt
+      - check-release
     uses: ./.github/workflows/github-release.yml
     with:
-      tag: ${{ inputs.tag }}
+      tag: ${{ needs.check-release.outputs.tag }}
     secrets: inherit
 
   ## Build and push Debian image built from source
