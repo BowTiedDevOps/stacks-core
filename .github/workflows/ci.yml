@@ -57,7 +57,9 @@ jobs:
   ##  - The workflow was triggered by a `workflow_dispatch` action
   check-release:
     if: |
-      ${{ github.event_name == 'workflow_dispatch' }}
+      (
+        github.event_name == 'workflow_dispatch'
+      )
     name: Check Release
     needs:
       - rustfmt
