@@ -61,6 +61,18 @@ jobs:
         run: |
           echo "docker-org=${{ github.repository_owner }}" >> "$GITHUB_ENV"
 
+      - name: Set Docker Repository
+        id: set_docker_repo
+        run: |
+          case "${{ inputs.tag }}" in
+            signer-*)
+              echo "DOCKER_REPO=stacks-signer" >> $GITHUB_ENV
+              ;;
+            *)
+              echo "DOCKER_REPO=stacks-core" >> $GITHUB_ENV
+              ;;
+          esac
+
       ## Set docker metatdata
       ## - depending on the matrix.dist, different tags will be enabled
       ## ex. debian will have this tag: `type=ref,event=tag,enable=${{ matrix.dist == 'debian' }}`
@@ -70,8 +82,7 @@ jobs:
         with:
           ## tag images with current repo name `stacks-core` as well as legacy `stacks-blockchain`
           images: |
-            ${{env.docker-org}}/${{ github.event.repository.name }}
-            ${{env.docker-org}}/stacks-blockchain
+            ${{env.docker-org}}/${{ github.env.DOCKER_REPO }}
           tags: |
             type=raw,value=latest,enable=${{ inputs.docker_tag != '' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ) && matrix.dist == 'debian' }}
             type=raw,value=${{ inputs.docker_tag }}-${{ matrix.dist }},enable=${{ inputs.docker_tag != '' && matrix.dist == 'debian'}}
