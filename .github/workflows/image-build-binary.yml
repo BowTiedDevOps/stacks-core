@@ -61,15 +61,15 @@ jobs:
         run: |
           echo "docker-org=${{ github.repository_owner }}" >> "$GITHUB_ENV"
 
-      - name: Set Docker Repository
-        id: set_docker_repo
+      - name: Check Signer Release
+        id: check_signer_release
         run: |
           case "${{ inputs.tag }}" in
             signer-*)
-              echo "DOCKER_REPO=stacks-signer" >> $GITHUB_ENV
+              echo "IS_SIGNER_RELEASE=true" >> $GITHUB_ENV
               ;;
             *)
-              echo "DOCKER_REPO=${{ github.event.repository.name }}" >> $GITHUB_ENV
+              echo "IS_SIGNER_RELEASE=false" >> $GITHUB_ENV
               ;;
           esac
 
@@ -77,12 +77,12 @@ jobs:
       ## - depending on the matrix.dist, different tags will be enabled
       ## ex. debian will have this tag: `type=ref,event=tag,enable=${{ matrix.dist == 'debian' }}`
       - name: Docker Metadata ( ${{matrix.dist}} )
-        id: docker_metadata
+        if: ${{ github.env.IS_SIGNER_RELEASE == 'true' }}
+        id: docker_metadata_signer
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 #v5.5.1
         with:
-          ## tag images with current repo name `stacks-core` as well as legacy `stacks-blockchain`
           images: |
-            ${{env.docker-org}}/${{ github.env.DOCKER_REPO }}
+            ${{env.docker-org}}/stacks-signer
           tags: |
             type=raw,value=latest,enable=${{ inputs.docker_tag != '' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ) && matrix.dist == 'debian' }}
             type=raw,value=${{ inputs.docker_tag }}-${{ matrix.dist }},enable=${{ inputs.docker_tag != '' && matrix.dist == 'debian'}}
@@ -91,15 +91,51 @@ jobs:
             type=raw,value=latest-${{ matrix.dist }},enable=${{ inputs.docker_tag != '' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ) && matrix.dist == 'alpine' }}
             type=raw,value=${{ inputs.docker_tag }}-${{ matrix.dist }},enable=${{ inputs.docker_tag != '' && matrix.dist == 'alpine' }}
 
-      ## Build docker image for release
+      - name: Docker Metadata ( ${{matrix.dist}} )
+        if: ${{ github.env.IS_SIGNER_RELEASE == 'false' }}
+        id: docker_metadata_node
+        uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 #v5.5.1
+        with:
+          ## tag images with current repo name `stacks-core` as well as legacy `stacks-blockchain`
+          images: |
+            ${{env.docker-org}}/${{ github.event.repository.name }}
+            ${{env.docker-org}}/stacks-blockchain
+          tags: |
+            type=raw,value=latest,enable=${{ inputs.docker_tag != '' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ) && matrix.dist == 'debian' }}
+            type=raw,value=${{ inputs.docker_tag }}-${{ matrix.dist }},enable=${{ inputs.docker_tag != '' && matrix.dist == 'debian'}}
+            type=raw,value=${{ inputs.docker_tag }},enable=${{ inputs.docker_tag != '' && matrix.dist == 'debian' }}
+            type=ref,event=tag,enable=${{ matrix.dist == 'debian' }}
+            type=raw,value=latest-${{ matrix.dist }},enable=${{ inputs.docker_tag != '' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) ) && matrix.dist == 'alpine' }}
+            type=raw,value=${{ inputs.docker_tag }}-${{ matrix.dist }},enable=${{ inputs.docker_tag != '' && matrix.dist == 'alpine' }}
+
+      ## Build docker image for signer release
       - name: Build and Push ( ${{matrix.dist}} )
-        id: docker_build
+        if: ${{ github.env.IS_SIGNER_RELEASE == 'true' }}
+        id: docker_build_signer
         uses: docker/build-push-action@2cdde995de11925a030ce8070c3d77a52ffcf1c0 # v5.3.0
         with:
           file: ./.github/actions/dockerfiles/Dockerfile.${{ matrix.dist }}-binary
           platforms: ${{ env.docker_platforms }}
-          tags: ${{ steps.docker_metadata.outputs.tags }}
-          labels: ${{ steps.docker_metadata.outputs.labels }}
+          tags: ${{ steps.docker_metadata_signer.outputs.tags }}
+          labels: ${{ steps.docker_metadata_signer.outputs.labels }}
+          build-args: |
+            TAG=${{ inputs.tag }}
+            REPO=${{ github.repository_owner }}/${{ github.event.repository.name }}
+            STACKS_NODE_VERSION=${{ inputs.tag || env.GITHUB_SHA_SHORT }}
+            GIT_BRANCH=${{ env.GITHUB_REF_SHORT }}
+            GIT_COMMIT=${{ env.GITHUB_SHA_SHORT }}
+          push: ${{ env.DOCKER_PUSH }}
+
+      ## Build docker image for node release
+      - name: Build and Push ( ${{matrix.dist}} )
+        if: ${{ github.env.IS_SIGNER_RELEASE == 'false' }}
+        id: docker_build_node
+        uses: docker/build-push-action@2cdde995de11925a030ce8070c3d77a52ffcf1c0 # v5.3.0
+        with:
+          file: ./.github/actions/dockerfiles/Dockerfile.${{ matrix.dist }}-binary
+          platforms: ${{ env.docker_platforms }}
+          tags: ${{ steps.docker_metadata_node.outputs.tags }}
+          labels: ${{ steps.docker_metadata_node.outputs.labels }}
           build-args: |
             TAG=${{ inputs.tag }}
             REPO=${{ github.repository_owner }}/${{ github.event.repository.name }}
