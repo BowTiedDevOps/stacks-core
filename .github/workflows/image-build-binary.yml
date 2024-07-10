@@ -66,10 +66,10 @@ jobs:
         run: |
           case "${{ inputs.tag }}" in
             signer-*)
-              echo "IS_SIGNER_RELEASE=true" >> $GITHUB_ENV
+              echo "is-signer-release=true" >> $GITHUB_ENV
               ;;
             *)
-              echo "IS_SIGNER_RELEASE=false" >> $GITHUB_ENV
+              echo "is-signer-release=false" >> $GITHUB_ENV
               ;;
           esac
 
@@ -77,7 +77,7 @@ jobs:
       ## - depending on the matrix.dist, different tags will be enabled
       ## ex. debian will have this tag: `type=ref,event=tag,enable=${{ matrix.dist == 'debian' }}`
       - name: Docker Metadata ( ${{matrix.dist}} )
-        if: ${{ github.env.IS_SIGNER_RELEASE == 'true' }}
+        if: ${{ env.is-signer-release == 'true' }}
         id: docker_metadata_signer
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 #v5.5.1
         with:
@@ -92,7 +92,7 @@ jobs:
             type=raw,value=${{ inputs.docker_tag }}-${{ matrix.dist }},enable=${{ inputs.docker_tag != '' && matrix.dist == 'alpine' }}
 
       - name: Docker Metadata ( ${{matrix.dist}} )
-        if: ${{ github.env.IS_SIGNER_RELEASE == 'false' }}
+        if: ${{ env.is-signer-release == 'false' }}
         id: docker_metadata_node
         uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 #v5.5.1
         with:
@@ -110,7 +110,7 @@ jobs:
 
       ## Build docker image for signer release
       - name: Build and Push ( ${{matrix.dist}} )
-        if: ${{ github.env.IS_SIGNER_RELEASE == 'true' }}
+        if: ${{ env.is-signer-release == 'true' }}
         id: docker_build_signer
         uses: docker/build-push-action@2cdde995de11925a030ce8070c3d77a52ffcf1c0 # v5.3.0
         with:
@@ -128,7 +128,7 @@ jobs:
 
       ## Build docker image for node release
       - name: Build and Push ( ${{matrix.dist}} )
-        if: ${{ github.env.IS_SIGNER_RELEASE == 'false' }}
+        if: ${{ env.is-signer-release == 'false' }}
         id: docker_build_node
         uses: docker/build-push-action@2cdde995de11925a030ce8070c3d77a52ffcf1c0 # v5.3.0
         with:
