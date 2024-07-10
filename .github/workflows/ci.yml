@@ -94,6 +94,8 @@ jobs:
     uses: ./.github/workflows/github-release.yml
     with:
       tag: ${{ needs.check-release.outputs.tag }}
+      docker_tag: ${{ needs.check-release.outputs.docker_tag }}
+      signer_release: ${{ needs.check-release.outputs.signer_release }}
     secrets: inherit
 
   ## Build and push Debian image built from source

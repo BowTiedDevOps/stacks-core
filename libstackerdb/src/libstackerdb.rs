@@ -19,6 +19,7 @@
 // even more code
 // add code
 // more code
+// add code
 
 extern crate clarity;
 extern crate serde;
