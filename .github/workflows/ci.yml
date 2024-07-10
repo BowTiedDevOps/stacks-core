@@ -14,10 +14,6 @@ on:
       - "**.md"
       - "**.yml"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "The tag to create (optional)"
-        required: false
   pull_request:
     types:
       - opened
@@ -34,7 +30,7 @@ concurrency:
   ## Always cancel duplicate jobs
   cancel-in-progress: true
 
-run-name: ${{ inputs.tag }}
+run-name: ${{ github.ref_name }}
 
 jobs:
   ##
@@ -56,7 +52,12 @@ jobs:
 
   ######################################################################################
   ## Check if the head branch of the PR is a release branch
+  ##
+  ## Runs when the following is true:
+  ##  - The workflow was triggered by a `workflow_dispatch` action
   check-release:
+    if: |
+      ${{ github.event_name == 'workflow_dispatch' }}
     name: Check Release
     needs:
       - rustfmt
@@ -64,13 +65,12 @@ jobs:
     outputs:
       tag: ${{ steps.check_release.outputs.tag }}
       docker_tag: ${{ steps.check_release.outputs.docker_tag }}
-      signer_release: ${{ steps.check_release.outputs.signer_release }}
     steps:
       - name: Check Release
         id: check_release
         uses: BowTiedDevOps/actions/stacks-core/check-release@main
         with:
-          tag: ${{ github.event.pull_request.head.ref }}
+          tag: ${{ github.ref_name }}
 
   ######################################################################################
   ## Create a tagged github release
@@ -79,13 +79,11 @@ jobs:
   ##  - the check-release job outputs a non-empty string for:
   ##    - the tag
   ##    - the docker tag
-  ##    - whether it is a signer or a node release
   create-release:
     if: |
       (
         needs.check-release.outputs.tag != '' &&
-        needs.check-release.outputs.docker_tag != '' &&
-        needs.check-release.outputs.signer_release != ''
+        needs.check-release.outputs.docker_tag != ''
       )
     name: Create Release
     needs:
@@ -95,7 +93,6 @@ jobs:
     with:
       tag: ${{ needs.check-release.outputs.tag }}
       docker_tag: ${{ needs.check-release.outputs.docker_tag }}
-      signer_release: ${{ needs.check-release.outputs.signer_release }}
     secrets: inherit
 
   ## Build and push Debian image built from source

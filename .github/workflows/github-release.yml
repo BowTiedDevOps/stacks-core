@@ -13,10 +13,6 @@ on:
         description: "Docker Release Tag"
         required: true
         type: string
-      signer_release:
-        description: "True if Signer Release"
-        required: true
-        type: string
     secrets:
       GH_TOKEN:
         required: true
@@ -38,7 +34,6 @@ jobs:
           echo "Yes fam it reached here gg"
           echo "Tag: ${{ inputs.tag }}"
           echo "Docker Tag: ${{ inputs.docker_tag }}"
-          echo "Signer Release: ${{ inputs.signer_release }}"
 
   ## Build arch dependent binaries from source
   ##
@@ -113,4 +108,5 @@ jobs:
       - create-release
     with:
       tag: ${{ inputs.tag }}
+      docker_tag: ${{ inputs.docker_tag }}
     secrets: inherit
