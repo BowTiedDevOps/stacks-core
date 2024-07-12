@@ -25,16 +25,6 @@ concurrency:
 run-name: ${{ inputs.tag }}
 
 jobs:
-  test-print:
-    name: Test Job
-    runs-on: ubuntu-latest
-    steps:
-      - name: Test Print
-        run: |
-          echo "Yes fam it reached here gg"
-          echo "Tag: ${{ inputs.tag }}"
-          echo "Docker Tag: ${{ inputs.docker_tag }}"
-
   ## Build arch dependent binaries from source
   ##
   ## Runs when the following is true:
