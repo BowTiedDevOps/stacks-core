@@ -36,18 +36,18 @@ use stacks_common::types::StacksEpochId;
 use stacks_common::util::hash::to_hex;
 use stacks_common::util::secp256k1::Secp256k1PublicKey;
 use stacks_common::util::{get_epoch_time_ms, get_epoch_time_secs, log};
-use wsts::curve::point::Point;
 use {mio, url};
 
 use crate::burnchains::db::{BurnchainDB, BurnchainHeaderReader};
 use crate::burnchains::{Address, Burnchain, BurnchainView, PublicKey};
-use crate::chainstate::burn::db::sortdb::{BlockHeaderCache, SortitionDB};
+use crate::chainstate::burn::db::sortdb::{get_ancestor_sort_id, BlockHeaderCache, SortitionDB};
 use crate::chainstate::burn::BlockSnapshot;
 use crate::chainstate::coordinator::{
     static_get_canonical_affirmation_map, static_get_heaviest_affirmation_map,
-    static_get_stacks_tip_affirmation_map,
+    static_get_stacks_tip_affirmation_map, OnChainRewardSetProvider, RewardCycleInfo,
 };
-use crate::chainstate::stacks::boot::MINERS_NAME;
+use crate::chainstate::nakamoto::coordinator::load_nakamoto_reward_set;
+use crate::chainstate::stacks::boot::{RewardSet, MINERS_NAME};
 use crate::chainstate::stacks::db::StacksChainState;
 use crate::chainstate::stacks::{StacksBlockHeader, MAX_BLOCK_LEN, MAX_TRANSACTION_LEN};
 use crate::core::StacksEpoch;
@@ -209,6 +209,48 @@ pub enum MempoolSyncState {
 }
 
 pub type PeerMap = HashMap<usize, ConversationP2P>;
+pub type PendingMessages = HashMap<usize, Vec<StacksMessage>>;
+
+pub struct ConnectingPeer {
+    socket: mio_net::TcpStream,
+    outbound: bool,
+    timestamp: u64,
+    nk: NeighborKey,
+}
+
+impl ConnectingPeer {
+    pub fn new(
+        socket: mio_net::TcpStream,
+        outbound: bool,
+        timestamp: u64,
+        nk: NeighborKey,
+    ) -> Self {
+        Self {
+            socket,
+            outbound,
+            timestamp,
+            nk,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CurrentRewardSet {
+    pub reward_cycle: u64,
+    pub reward_cycle_info: RewardCycleInfo,
+    pub anchor_block_consensus_hash: ConsensusHash,
+    pub anchor_block_hash: BlockHeaderHash,
+}
+
+impl CurrentRewardSet {
+    pub fn reward_set(&self) -> Option<&RewardSet> {
+        self.reward_cycle_info.known_selected_anchor_block()
+    }
+
+    pub fn anchor_block_id(&self) -> StacksBlockId {
+        StacksBlockId::new(&self.anchor_block_consensus_hash, &self.anchor_block_hash)
+    }
+}
 
 pub struct PeerNetwork {
     // constants
@@ -236,13 +278,9 @@ pub struct PeerNetwork {
     /// In epoch 2.x, this is the same as the tip block ID
     /// In nakamoto, this is the block ID of the first block in the current tenure
     pub tenure_start_block_id: StacksBlockId,
-    /// The aggregate public keys of each witnessed reward cycle.
-    /// Only active during epoch 3.x and beyond.
-    /// Gets refreshed on each new Stacks block arrival, which deals with burnchain forks.
-    /// Stored in a BTreeMap because we often need to query the last or second-to-last reward cycle
-    /// aggregate public key, and we need to determine whether or not to load new reward cycles'
-    /// keys.
-    pub aggregate_public_keys: BTreeMap<u64, Option<Point>>,
+    /// The reward sets of the past three reward cycles.
+    /// Needed to validate blocks, which are signed by a threshold of stackers
+    pub current_reward_sets: BTreeMap<u64, CurrentRewardSet>,
 
     // information about the state of the network's anchor blocks
     pub heaviest_affirmation_map: AffirmationMap,
@@ -260,7 +298,7 @@ pub struct PeerNetwork {
     pub peers: PeerMap,
     pub sockets: HashMap<usize, mio_net::TcpStream>,
     pub events: HashMap<NeighborKey, usize>,
-    pub connecting: HashMap<usize, (mio_net::TcpStream, bool, u64)>, // (socket, outbound?, connection sent timestamp)
+    pub connecting: HashMap<usize, ConnectingPeer>,
     pub bans: HashSet<usize>,
 
     // ongoing messages the network is sending via the p2p interface
@@ -284,7 +322,7 @@ pub struct PeerNetwork {
     // work state -- we can be walking, fetching block inventories, fetching blocks, pruning, etc.
     pub work_state: PeerNetworkWorkState,
     pub nakamoto_work_state: PeerNetworkWorkState,
-    have_data_to_download: bool,
+    pub(crate) have_data_to_download: bool,
 
     // neighbor walk state
     pub walk: Option<NeighborWalk<PeerDBNeighborWalk, PeerNetworkComms>>,
@@ -372,9 +410,10 @@ pub struct PeerNetwork {
     antientropy_start_reward_cycle: u64,
     pub antientropy_last_push_ts: u64,
 
-    // pending messages (BlocksAvailable, MicroblocksAvailable, BlocksData, Microblocks) that we
-    // can't process yet, but might be able to process on the next chain view update
-    pub pending_messages: HashMap<usize, Vec<StacksMessage>>,
+    /// Pending messages (BlocksAvailable, MicroblocksAvailable, BlocksData, Microblocks,
+    /// NakamotoBlocks) that we can't process yet, but might be able to process on a subsequent
+    /// chain view update.
+    pub pending_messages: PendingMessages,
 
     // fault injection -- force disconnects
     fault_last_disconnect: u64,
@@ -453,7 +492,7 @@ impl PeerNetwork {
             stacks_tip_sn: None,
             parent_stacks_tip: (ConsensusHash([0x00; 20]), BlockHeaderHash([0x00; 32]), 0),
             tenure_start_block_id: StacksBlockId([0x00; 32]),
-            aggregate_public_keys: BTreeMap::new(),
+            current_reward_sets: BTreeMap::new(),
 
             peerdb: peerdb,
             atlasdb: atlasdb,
@@ -536,7 +575,7 @@ impl PeerNetwork {
             antientropy_last_push_ts: 0,
             antientropy_start_reward_cycle: 0,
 
-            pending_messages: HashMap::new(),
+            pending_messages: PendingMessages::new(),
 
             fault_last_disconnect: 0,
 
@@ -644,6 +683,24 @@ impl PeerNetwork {
         };
 
         Ok(())
+    }
+
+    /// Call `bind()` only if not already bound
+    /// Returns:
+    /// - `Ok(true)` if `bind()` call was successful
+    /// - `Ok(false)` if `bind()` call was skipped
+    /// - `Err()` if `bind()`` failed
+    #[cfg_attr(test, mutants::skip)]
+    pub fn try_bind(
+        &mut self,
+        my_addr: &SocketAddr,
+        http_addr: &SocketAddr,
+    ) -> Result<bool, net_error> {
+        if self.network.is_some() {
+            // Already bound
+            return Ok(false);
+        }
+        self.bind(my_addr, http_addr).map(|()| true)
     }
 
     /// Get bound neighbor key. This is how this PeerNetwork appears to other nodes.
@@ -960,13 +1017,15 @@ impl PeerNetwork {
         })?
     }
 
-    /// Broadcast a message to a list of neighbors
+    /// Broadcast a message to a list of neighbors.
+    /// Neighbors in the `relay_hints` vec will *not* receive data, since they were the one(s) that
+    /// sent this peer the message in the first place.
     pub fn broadcast_message(
         &mut self,
         mut neighbor_keys: Vec<NeighborKey>,
         relay_hints: Vec<RelayData>,
         message_payload: StacksMessageType,
-    ) -> () {
+    ) {
         debug!(
             "{:?}: Will broadcast '{}' to up to {} neighbors; relayed by {:?}",
             &self.local_peer,
@@ -1157,8 +1216,10 @@ impl PeerNetwork {
                 let registered_event_id =
                     network.register(self.p2p_network_handle, hint_event_id, &sock)?;
 
-                self.connecting
-                    .insert(registered_event_id, (sock, true, get_epoch_time_secs()));
+                self.connecting.insert(
+                    registered_event_id,
+                    ConnectingPeer::new(sock, true, get_epoch_time_secs(), neighbor.clone()),
+                );
                 registered_event_id
             }
         };
@@ -1287,12 +1348,13 @@ impl PeerNetwork {
         Ok(ret)
     }
 
+    #[cfg_attr(test, mutants::skip)]
     /// Dispatch a single request from another thread.
     pub fn dispatch_request(&mut self, request: NetworkRequest) -> Result<(), net_error> {
         match request {
             NetworkRequest::Ban(neighbor_keys) => {
                 for neighbor_key in neighbor_keys.iter() {
-                    debug!("Request to ban {:?}", neighbor_key);
+                    info!("Request to ban {:?}", neighbor_key);
                     match self.events.get(neighbor_key) {
                         Some(event_id) => {
                             debug!("Will ban {:?} (event {})", neighbor_key, event_id);
@@ -1341,6 +1403,17 @@ impl PeerNetwork {
                             for nk in neighbors.drain(..) {
                                 all_neighbors.insert(nk);
                             }
+                        }
+                        Ok(all_neighbors.into_iter().collect())
+                    }
+                    StacksMessageType::NakamotoBlocks(ref data) => {
+                        // send to each neighbor that needs one
+                        let mut all_neighbors = HashSet::new();
+                        for nakamoto_block in data.blocks.iter() {
+                            let neighbors =
+                                self.sample_broadcast_peers(&relay_hints, nakamoto_block)?;
+
+                            all_neighbors.extend(neighbors);
                         }
                         Ok(all_neighbors.into_iter().collect())
                     }
@@ -1552,6 +1625,14 @@ impl PeerNetwork {
     /// Is an event ID connecting?
     pub fn is_connecting(&self, event_id: usize) -> bool {
         self.connecting.contains_key(&event_id)
+    }
+
+    /// Is a neighbor connecting on any event?
+    pub fn is_connecting_neighbor(&self, nk: &NeighborKey) -> bool {
+        self.connecting
+            .iter()
+            .find(|(_, peer)| peer.nk == *nk)
+            .is_some()
     }
 
     /// Is this neighbor key the same as the one that represents our p2p bind address?
@@ -1829,7 +1910,7 @@ impl PeerNetwork {
                     let _ = network.deregister(event_id, &socket);
                 }
                 // deregister socket if still connecting
-                if let Some((socket, ..)) = self.connecting.remove(&event_id) {
+                if let Some(ConnectingPeer { socket, .. }) = self.connecting.remove(&event_id) {
                     let _ = network.deregister(event_id, &socket);
                 }
             }
@@ -2089,7 +2170,9 @@ impl PeerNetwork {
     fn process_connecting_sockets(&mut self, poll_state: &mut NetworkPollState) {
         for event_id in poll_state.ready.iter() {
             if self.connecting.contains_key(event_id) {
-                let (socket, outbound, _) = self.connecting.remove(event_id).unwrap();
+                let ConnectingPeer {
+                    socket, outbound, ..
+                } = self.connecting.remove(event_id).unwrap();
                 let sock_str = format!("{:?}", &socket);
                 if let Err(_e) = self.register_peer(*event_id, socket, outbound) {
                     debug!(
@@ -2241,9 +2324,18 @@ impl PeerNetwork {
     fn disconnect_unresponsive(&mut self) -> usize {
         let now = get_epoch_time_secs();
         let mut to_remove = vec![];
-        for (event_id, (socket, _, ts)) in self.connecting.iter() {
-            if ts + self.connection_opts.connect_timeout < now {
-                debug!("{:?}: Disconnect unresponsive connecting peer {:?} (event {}): timed out after {} ({} < {})s", &self.local_peer, socket, event_id, self.connection_opts.timeout, ts + self.connection_opts.timeout, now);
+        for (event_id, peer) in self.connecting.iter() {
+            if peer.timestamp + self.connection_opts.connect_timeout < now {
+                debug!(
+                    "{:?}: Disconnect unresponsive connecting peer {:?} (event {} neighbor {}): timed out after {} ({} < {})s",
+                    &self.local_peer,
+                    &peer.socket,
+                    event_id,
+                    &peer.nk,
+                    self.connection_opts.timeout,
+                    peer.timestamp + self.connection_opts.timeout,
+                    now
+                );
                 to_remove.push(*event_id);
             }
         }
@@ -4366,759 +4458,6 @@ impl PeerNetwork {
         Some(outbound_neighbor_key)
     }
 
-    /// Update a peer's inventory state to indicate that the given block is available.
-    /// If updated, return the sortition height of the bit in the inv that was set.
-    /// Only valid for epoch 2.x
-    fn handle_unsolicited_inv_update_epoch2x(
-        &mut self,
-        sortdb: &SortitionDB,
-        event_id: usize,
-        outbound_neighbor_key: &NeighborKey,
-        consensus_hash: &ConsensusHash,
-        microblocks: bool,
-    ) -> Result<Option<u64>, net_error> {
-        let epoch = self.get_current_epoch();
-        if epoch.epoch_id >= StacksEpochId::Epoch30 {
-            info!(
-                "{:?}: Ban peer event {} for sending an inv 2.x update for {} in epoch 3.x",
-                event_id,
-                self.get_local_peer(),
-                consensus_hash
-            );
-            self.bans.insert(event_id);
-
-            if let Some(outbound_event_id) = self.events.get(&outbound_neighbor_key) {
-                self.bans.insert(*outbound_event_id);
-            }
-            return Ok(None);
-        }
-
-        let block_sortition_height = match self.inv_state {
-            Some(ref mut inv) => {
-                let res = if microblocks {
-                    inv.set_microblocks_available(
-                        &self.burnchain,
-                        outbound_neighbor_key,
-                        sortdb,
-                        consensus_hash,
-                    )
-                } else {
-                    inv.set_block_available(
-                        &self.burnchain,
-                        outbound_neighbor_key,
-                        sortdb,
-                        consensus_hash,
-                    )
-                };
-
-                match res {
-                    Ok(Some(block_height)) => block_height,
-                    Ok(None) => {
-                        debug!(
-                            "{:?}: We already know the inventory state in {} for {}",
-                            &self.local_peer, outbound_neighbor_key, consensus_hash
-                        );
-                        return Ok(None);
-                    }
-                    Err(net_error::NotFoundError) => {
-                        // is this remote node simply ahead of us?
-                        if let Some(convo) = self.peers.get(&event_id) {
-                            if self.chain_view.burn_block_height < convo.burnchain_tip_height {
-                                debug!("{:?}: Unrecognized consensus hash {}; it is possible that {} is ahead of us", &self.local_peer, consensus_hash, outbound_neighbor_key);
-                                return Err(net_error::NotFoundError);
-                            }
-                        }
-                        // not ahead of us -- it's a bad consensus hash
-                        debug!("{:?}: Unrecognized consensus hash {}; assuming that {} has a different chain view", &self.local_peer, consensus_hash, outbound_neighbor_key);
-                        return Ok(None);
-                    }
-                    Err(net_error::InvalidMessage) => {
-                        // punish this peer
-                        info!(
-                            "Peer {:?} sent an invalid update for {}",
-                            &outbound_neighbor_key,
-                            if microblocks {
-                                "streamed microblocks"
-                            } else {
-                                "blocks"
-                            }
-                        );
-                        self.bans.insert(event_id);
-
-                        if let Some(outbound_event_id) = self.events.get(&outbound_neighbor_key) {
-                            self.bans.insert(*outbound_event_id);
-                        }
-                        return Ok(None);
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to update inv state for {:?}: {:?}",
-                            &outbound_neighbor_key, &e
-                        );
-                        return Ok(None);
-                    }
-                }
-            }
-            None => {
-                return Ok(None);
-            }
-        };
-        Ok(Some(block_sortition_height))
-    }
-
-    /// Buffer a message for re-processing once the burnchain view updates
-    fn buffer_data_message(&mut self, event_id: usize, msg: StacksMessage) -> () {
-        if let Some(msgs) = self.pending_messages.get_mut(&event_id) {
-            // check limits:
-            // at most 1 BlocksAvailable
-            // at most 1 MicroblocksAvailable
-            // at most 1 BlocksData
-            // at most $self.connection_opts.max_buffered_microblocks MicroblocksDatas
-            let mut blocks_available = 0;
-            let mut microblocks_available = 0;
-            let mut blocks_data = 0;
-            let mut microblocks_data = 0;
-            for msg in msgs.iter() {
-                match &msg.payload {
-                    StacksMessageType::BlocksAvailable(_) => {
-                        blocks_available += 1;
-                    }
-                    StacksMessageType::MicroblocksAvailable(_) => {
-                        microblocks_available += 1;
-                    }
-                    StacksMessageType::Blocks(_) => {
-                        blocks_data += 1;
-                    }
-                    StacksMessageType::Microblocks(_) => {
-                        microblocks_data += 1;
-                    }
-                    _ => {}
-                }
-            }
-
-            if let StacksMessageType::BlocksAvailable(_) = &msg.payload {
-                if blocks_available >= self.connection_opts.max_buffered_blocks_available {
-                    debug!(
-                        "{:?}: Drop BlocksAvailable from event {} -- already have {} buffered",
-                        &self.local_peer, event_id, blocks_available
-                    );
-                    return;
-                }
-            }
-            if let StacksMessageType::MicroblocksAvailable(_) = &msg.payload {
-                if microblocks_available >= self.connection_opts.max_buffered_microblocks_available
-                {
-                    debug!(
-                        "{:?}: Drop MicroblocksAvailable from event {} -- already have {} buffered",
-                        &self.local_peer, event_id, microblocks_available
-                    );
-                    return;
-                }
-            }
-            if let StacksMessageType::Blocks(_) = &msg.payload {
-                if blocks_data >= self.connection_opts.max_buffered_blocks {
-                    debug!(
-                        "{:?}: Drop BlocksData from event {} -- already have {} buffered",
-                        &self.local_peer, event_id, blocks_data
-                    );
-                    return;
-                }
-            }
-            if let StacksMessageType::Microblocks(_) = &msg.payload {
-                if microblocks_data >= self.connection_opts.max_buffered_microblocks {
-                    debug!(
-                        "{:?}: Drop MicroblocksData from event {} -- already have {} buffered",
-                        &self.local_peer, event_id, microblocks_data
-                    );
-                    return;
-                }
-            }
-            msgs.push(msg);
-            debug!(
-                "{:?}: Event {} has {} messages buffered",
-                &self.local_peer,
-                event_id,
-                msgs.len()
-            );
-        } else {
-            self.pending_messages.insert(event_id, vec![msg]);
-            debug!(
-                "{:?}: Event {} has 1 messages buffered",
-                &self.local_peer, event_id
-            );
-        }
-    }
-
-    /// Do we need a block or microblock stream, given its sortition's consensus hash?
-    fn need_block_or_microblock_stream(
-        sortdb: &SortitionDB,
-        chainstate: &StacksChainState,
-        consensus_hash: &ConsensusHash,
-        is_microblock: bool,
-    ) -> Result<bool, net_error> {
-        let sn = SortitionDB::get_block_snapshot_consensus(sortdb.conn(), &consensus_hash)?
-            .ok_or(chainstate_error::NoSuchBlockError)?;
-        let block_hash_opt = if sn.sortition {
-            Some(sn.winning_stacks_block_hash)
-        } else {
-            None
-        };
-
-        let inv = chainstate.get_blocks_inventory(&[(consensus_hash.clone(), block_hash_opt)])?;
-        if is_microblock {
-            // checking for microblock absence
-            Ok(inv.microblocks_bitvec[0] == 0)
-        } else {
-            // checking for block absence
-            Ok(inv.block_bitvec[0] == 0)
-        }
-    }
-
-    /// Handle unsolicited BlocksAvailable.
-    /// Update our inv for this peer.
-    /// Mask errors.
-    /// Return whether or not we need to buffer this message
-    fn handle_unsolicited_BlocksAvailable(
-        &mut self,
-        sortdb: &SortitionDB,
-        chainstate: &StacksChainState,
-        event_id: usize,
-        new_blocks: &BlocksAvailableData,
-        ibd: bool,
-        buffer: bool,
-    ) -> bool {
-        let outbound_neighbor_key = match self.find_outbound_neighbor(event_id) {
-            Some(onk) => onk,
-            None => {
-                return false;
-            }
-        };
-
-        debug!(
-            "{:?}: Process BlocksAvailable from {:?} with {} entries",
-            &self.local_peer,
-            outbound_neighbor_key,
-            new_blocks.available.len()
-        );
-
-        let mut to_buffer = false;
-        for (consensus_hash, block_hash) in new_blocks.available.iter() {
-            let block_sortition_height = match self.handle_unsolicited_inv_update_epoch2x(
-                sortdb,
-                event_id,
-                &outbound_neighbor_key,
-                consensus_hash,
-                false,
-            ) {
-                Ok(Some(bsh)) => bsh,
-                Ok(None) => {
-                    continue;
-                }
-                Err(net_error::NotFoundError) => {
-                    if buffer {
-                        debug!("{:?}: Will buffer BlocksAvailable for {} until the next burnchain view update", &self.local_peer, &consensus_hash);
-                        to_buffer = true;
-                    }
-                    continue;
-                }
-                Err(e) => {
-                    info!(
-                        "{:?}: Failed to handle BlocksAvailable({}/{}) from {}: {:?}",
-                        &self.local_peer, &consensus_hash, &block_hash, &outbound_neighbor_key, &e
-                    );
-                    continue;
-                }
-            };
-
-            let need_block = match PeerNetwork::need_block_or_microblock_stream(
-                sortdb,
-                chainstate,
-                &consensus_hash,
-                false,
-            ) {
-                Ok(x) => x,
-                Err(e) => {
-                    warn!(
-                        "Failed to determine if we need block for consensus hash {}: {:?}",
-                        &consensus_hash, &e
-                    );
-                    false
-                }
-            };
-
-            debug!(
-                "Need block {}/{}? {}",
-                &consensus_hash, &block_hash, need_block
-            );
-
-            if need_block {
-                // have the downloader request this block if it's new and we don't have it
-                match self.block_downloader {
-                    Some(ref mut downloader) => {
-                        downloader.hint_block_sortition_height_available(
-                            block_sortition_height,
-                            ibd,
-                            need_block,
-                        );
-
-                        // advance straight to download state if we're in inv state
-                        if self.work_state == PeerNetworkWorkState::BlockInvSync {
-                            debug!("{:?}: advance directly to block download with knowledge of block sortition {}", &self.local_peer, block_sortition_height);
-                        }
-                        self.have_data_to_download = true;
-                    }
-                    None => {}
-                }
-            }
-        }
-
-        to_buffer
-    }
-
-    /// Handle unsolicited MicroblocksAvailable.
-    /// Update our inv for this peer.
-    /// Mask errors.
-    /// Return whether or not we need to buffer this message
-    fn handle_unsolicited_MicroblocksAvailable(
-        &mut self,
-        sortdb: &SortitionDB,
-        chainstate: &StacksChainState,
-        event_id: usize,
-        new_mblocks: &BlocksAvailableData,
-        ibd: bool,
-        buffer: bool,
-    ) -> bool {
-        let outbound_neighbor_key = match self.find_outbound_neighbor(event_id) {
-            Some(onk) => onk,
-            None => {
-                return false;
-            }
-        };
-
-        debug!(
-            "{:?}: Process MicroblocksAvailable from {:?} with {} entries",
-            &self.local_peer,
-            outbound_neighbor_key,
-            new_mblocks.available.len()
-        );
-
-        let mut to_buffer = false;
-        for (consensus_hash, block_hash) in new_mblocks.available.iter() {
-            let mblock_sortition_height = match self.handle_unsolicited_inv_update_epoch2x(
-                sortdb,
-                event_id,
-                &outbound_neighbor_key,
-                consensus_hash,
-                true,
-            ) {
-                Ok(Some(bsh)) => bsh,
-                Ok(None) => {
-                    continue;
-                }
-                Err(net_error::NotFoundError) => {
-                    if buffer {
-                        debug!("{:?}: Will buffer MicroblocksAvailable for {} until the next burnchain view update", &self.local_peer, &consensus_hash);
-                        to_buffer = true;
-                    }
-                    continue;
-                }
-                Err(e) => {
-                    info!(
-                        "{:?}: Failed to handle MicroblocksAvailable({}/{}) from {}: {:?}",
-                        &self.local_peer, &consensus_hash, &block_hash, &outbound_neighbor_key, &e
-                    );
-                    continue;
-                }
-            };
-
-            let need_microblock_stream = match PeerNetwork::need_block_or_microblock_stream(
-                sortdb,
-                chainstate,
-                &consensus_hash,
-                true,
-            ) {
-                Ok(x) => x,
-                Err(e) => {
-                    warn!("Failed to determine if we need microblock stream for consensus hash {}: {:?}", &consensus_hash, &e);
-                    false
-                }
-            };
-
-            debug!(
-                "Need microblock stream {}/{}? {}",
-                &consensus_hash, &block_hash, need_microblock_stream
-            );
-
-            if need_microblock_stream {
-                // have the downloader request this microblock stream if it's new to us
-                match self.block_downloader {
-                    Some(ref mut downloader) => {
-                        downloader.hint_microblock_sortition_height_available(
-                            mblock_sortition_height,
-                            ibd,
-                            need_microblock_stream,
-                        );
-
-                        // advance straight to download state if we're in inv state
-                        if self.work_state == PeerNetworkWorkState::BlockInvSync {
-                            debug!("{:?}: advance directly to block download with knowledge of microblock stream {}", &self.local_peer, mblock_sortition_height);
-                        }
-                        self.have_data_to_download = true;
-                    }
-                    None => {}
-                }
-            }
-        }
-        to_buffer
-    }
-
-    /// Handle unsolicited BlocksData.
-    /// Don't (yet) validate the data, but do update our inv for the peer that sent it, if we have
-    /// an outbound connection to that peer.  Accept the blocks data either way if it corresponds
-    /// to a winning sortition -- this will cause the blocks data to be fed into the relayer, which
-    /// will then decide whether or not it needs to be stored and/or forwarded.
-    /// Mask errors.
-    fn handle_unsolicited_BlocksData(
-        &mut self,
-        sortdb: &SortitionDB,
-        event_id: usize,
-        new_blocks: &BlocksData,
-        buffer: bool,
-    ) -> bool {
-        let (remote_neighbor_key, remote_is_authenticated) = match self.peers.get(&event_id) {
-            Some(convo) => (convo.to_neighbor_key(), convo.is_authenticated()),
-            None => {
-                test_debug!(
-                    "{:?}: No such neighbor event={}",
-                    &self.local_peer,
-                    event_id
-                );
-                return false;
-            }
-        };
-
-        if !remote_is_authenticated {
-            // drop -- a correct peer will have authenticated before sending this message
-            test_debug!(
-                "{:?}: Drop unauthenticated BlocksData from {:?}",
-                &self.local_peer,
-                &remote_neighbor_key
-            );
-            return false;
-        }
-
-        let outbound_neighbor_key_opt = self.find_outbound_neighbor(event_id);
-
-        debug!(
-            "{:?}: Process BlocksData from {:?} with {} entries",
-            &self.local_peer,
-            outbound_neighbor_key_opt
-                .as_ref()
-                .unwrap_or(&remote_neighbor_key),
-            new_blocks.blocks.len()
-        );
-
-        let mut to_buffer = false;
-
-        for BlocksDatum(consensus_hash, block) in new_blocks.blocks.iter() {
-            let sn = match SortitionDB::get_block_snapshot_consensus(
-                &sortdb.conn(),
-                &consensus_hash,
-            ) {
-                Ok(Some(sn)) => sn,
-                Ok(None) => {
-                    if buffer {
-                        debug!(
-                                "{:?}: Will buffer unsolicited BlocksData({}/{}) ({}) -- consensus hash not (yet) recognized",
-                                &self.local_peer,
-                                &consensus_hash,
-                                &block.block_hash(),
-                                StacksBlockHeader::make_index_block_hash(
-                                    &consensus_hash,
-                                    &block.block_hash()
-                                )
-                            );
-                        to_buffer = true;
-                    } else {
-                        debug!(
-                                "{:?}: Will drop unsolicited BlocksData({}/{}) ({}) -- consensus hash not (yet) recognized",
-                                &self.local_peer,
-                                &consensus_hash,
-                                &block.block_hash(),
-                                StacksBlockHeader::make_index_block_hash(
-                                    &consensus_hash,
-                                    &block.block_hash()
-                                )
-                            );
-                    }
-                    continue;
-                }
-                Err(e) => {
-                    info!(
-                        "{:?}: Failed to query block snapshot for {}: {:?}",
-                        &self.local_peer, consensus_hash, &e
-                    );
-                    continue;
-                }
-            };
-
-            if !sn.pox_valid {
-                info!(
-                    "{:?}: Failed to query snapshot for {}: not on the valid PoX fork",
-                    &self.local_peer, consensus_hash
-                );
-                continue;
-            }
-
-            if sn.winning_stacks_block_hash != block.block_hash() {
-                info!(
-                    "{:?}: Ignoring block {} -- winning block was {} (sortition: {})",
-                    &self.local_peer,
-                    block.block_hash(),
-                    sn.winning_stacks_block_hash,
-                    sn.sortition
-                );
-                continue;
-            }
-
-            // only bother updating the inventory for this event's peer if we have an outbound
-            // connection to it.
-            if let Some(outbound_neighbor_key) = outbound_neighbor_key_opt.as_ref() {
-                let _ = self.handle_unsolicited_inv_update_epoch2x(
-                    sortdb,
-                    event_id,
-                    &outbound_neighbor_key,
-                    &sn.consensus_hash,
-                    false,
-                );
-            }
-        }
-
-        to_buffer
-    }
-
-    /// Handle unsolicited MicroblocksData.
-    /// Returns whether or not to buffer (if buffer is true)
-    /// Returns whether or not to pass to the relayer (if buffer is false).
-    fn handle_unsolicited_MicroblocksData(
-        &mut self,
-        chainstate: &StacksChainState,
-        event_id: usize,
-        new_microblocks: &MicroblocksData,
-        buffer: bool,
-    ) -> bool {
-        let (remote_neighbor_key, remote_is_authenticated) = match self.peers.get(&event_id) {
-            Some(convo) => (convo.to_neighbor_key(), convo.is_authenticated()),
-            None => {
-                test_debug!(
-                    "{:?}: No such neighbor event={}",
-                    &self.local_peer,
-                    event_id
-                );
-                return false;
-            }
-        };
-
-        if !remote_is_authenticated {
-            // drop -- a correct peer will have authenticated before sending this message
-            test_debug!(
-                "{:?}: Drop unauthenticated MicroblocksData from {:?}",
-                &self.local_peer,
-                &remote_neighbor_key
-            );
-            return false;
-        }
-
-        let outbound_neighbor_key_opt = self.find_outbound_neighbor(event_id);
-
-        debug!(
-            "{:?}: Process MicroblocksData from {:?} for {} with {} entries",
-            &self.local_peer,
-            outbound_neighbor_key_opt
-                .as_ref()
-                .unwrap_or(&remote_neighbor_key),
-            &new_microblocks.index_anchor_block,
-            new_microblocks.microblocks.len()
-        );
-
-        // do we have the associated anchored block?
-        match chainstate.get_block_header_hashes(&new_microblocks.index_anchor_block) {
-            Ok(Some(_)) => {
-                // yup; can process now
-                debug!("{:?}: have microblock parent anchored block {}, so can process its microblocks", &self.local_peer, &new_microblocks.index_anchor_block);
-                !buffer
-            }
-            Ok(None) => {
-                if buffer {
-                    debug!(
-                        "{:?}: Will buffer unsolicited MicroblocksData({})",
-                        &self.local_peer, &new_microblocks.index_anchor_block
-                    );
-                    true
-                } else {
-                    debug!(
-                        "{:?}: Will not buffer unsolicited MicroblocksData({})",
-                        &self.local_peer, &new_microblocks.index_anchor_block
-                    );
-                    false
-                }
-            }
-            Err(e) => {
-                warn!(
-                    "{:?}: Failed to get header hashes for {:?}: {:?}",
-                    &self.local_peer, &new_microblocks.index_anchor_block, &e
-                );
-                false
-            }
-        }
-    }
-
-    /// Returns (true, x) if we should buffer the message and try again
-    /// Returns (x, true) if the relayer should receive the message
-    fn handle_unsolicited_message(
-        &mut self,
-        sortdb: &SortitionDB,
-        chainstate: &StacksChainState,
-        event_id: usize,
-        preamble: &Preamble,
-        payload: &StacksMessageType,
-        ibd: bool,
-        buffer: bool,
-    ) -> (bool, bool) {
-        match payload {
-            // Update our inv state for this peer, but only do so if we have an
-            // outbound connection to it and it's authenticated (we don't synchronize inv
-            // state with inbound peers).  Since we will have received this message
-            // from an _inbound_ conversation, we need to find the reciprocal _outbound_
-            // conversation and use _that_ conversation's neighbor key to identify
-            // which inventory we need to update.
-            StacksMessageType::BlocksAvailable(ref new_blocks) => {
-                let to_buffer = self.handle_unsolicited_BlocksAvailable(
-                    sortdb, chainstate, event_id, new_blocks, ibd, buffer,
-                );
-                (to_buffer, false)
-            }
-            StacksMessageType::MicroblocksAvailable(ref new_mblocks) => {
-                let to_buffer = self.handle_unsolicited_MicroblocksAvailable(
-                    sortdb,
-                    chainstate,
-                    event_id,
-                    new_mblocks,
-                    ibd,
-                    buffer,
-                );
-                (to_buffer, false)
-            }
-            StacksMessageType::Blocks(ref new_blocks) => {
-                // update inv state for this peer
-                let to_buffer =
-                    self.handle_unsolicited_BlocksData(sortdb, event_id, new_blocks, buffer);
-
-                // forward to relayer for processing
-                (to_buffer, true)
-            }
-            StacksMessageType::Microblocks(ref new_mblocks) => {
-                let to_buffer = self.handle_unsolicited_MicroblocksData(
-                    chainstate,
-                    event_id,
-                    new_mblocks,
-                    buffer,
-                );
-
-                // only forward to the relayer if we don't need to buffer it.
-                (to_buffer, true)
-            }
-            StacksMessageType::StackerDBPushChunk(ref data) => {
-                match self.handle_unsolicited_StackerDBPushChunk(event_id, preamble, data) {
-                    Ok(x) => {
-                        // don't buffer, but do reject if invalid
-                        (false, x)
-                    }
-                    Err(e) => {
-                        info!(
-                            "{:?}: failed to handle unsolicited {:?}: {:?}",
-                            &self.local_peer, payload, &e
-                        );
-                        (false, false)
-                    }
-                }
-            }
-            _ => (false, true),
-        }
-    }
-
-    /// Handle unsolicited messages propagated up to us from our ongoing ConversationP2Ps.
-    /// Return messages that we couldn't handle here, but key them by neighbor, not event.
-    /// Drop invalid messages.
-    /// If buffer is true, then re-try handling this message once the burnchain view advances.
-    fn handle_unsolicited_messages(
-        &mut self,
-        sortdb: &SortitionDB,
-        chainstate: &StacksChainState,
-        unsolicited: HashMap<usize, Vec<StacksMessage>>,
-        ibd: bool,
-        buffer: bool,
-    ) -> HashMap<NeighborKey, Vec<StacksMessage>> {
-        let mut unhandled: HashMap<NeighborKey, Vec<StacksMessage>> = HashMap::new();
-        for (event_id, messages) in unsolicited.into_iter() {
-            if messages.len() == 0 {
-                // no messages for this event
-                continue;
-            }
-
-            let neighbor_key = if let Some(convo) = self.peers.get(&event_id) {
-                convo.to_neighbor_key()
-            } else {
-                debug!(
-                    "{:?}: No longer such neighbor event={}, dropping {} unsolicited messages",
-                    &self.local_peer,
-                    event_id,
-                    messages.len()
-                );
-                continue;
-            };
-
-            debug!("{:?}: Process {} unsolicited messages from {:?}", &self.local_peer, messages.len(), &neighbor_key; "buffer" => %buffer);
-
-            for message in messages.into_iter() {
-                if !buffer {
-                    debug!(
-                        "{:?}: Re-try handling buffered message {} from {:?}",
-                        &self.local_peer,
-                        &message.payload.get_message_description(),
-                        &neighbor_key
-                    );
-                }
-                let (to_buffer, relay) = self.handle_unsolicited_message(
-                    sortdb,
-                    chainstate,
-                    event_id,
-                    &message.preamble,
-                    &message.payload,
-                    ibd,
-                    buffer,
-                );
-                if buffer && to_buffer {
-                    self.buffer_data_message(event_id, message);
-                } else if relay {
-                    // forward to relayer for processing
-                    debug!(
-                        "{:?}: Will forward message {} from {:?} to relayer",
-                        &self.local_peer,
-                        &message.payload.get_message_description(),
-                        &neighbor_key
-                    );
-                    if let Some(msgs) = unhandled.get_mut(&neighbor_key) {
-                        msgs.push(message);
-                    } else {
-                        unhandled.insert(neighbor_key.clone(), vec![message]);
-                    }
-                }
-            }
-        }
-        unhandled
-    }
-
     /// Find unauthenticated inbound conversations
     fn find_unauthenticated_inbound_convos(&self) -> Vec<usize> {
         let mut ret = vec![];
@@ -5301,6 +4640,7 @@ impl PeerNetwork {
             chainstate,
             sortdb,
             stacker_db_configs,
+            self.connection_opts.num_neighbors,
         )?;
         Ok(())
     }
@@ -5368,58 +4708,95 @@ impl PeerNetwork {
         ))
     }
 
-    /// Refresh our view of the aggregate public keys
-    /// Returns a list of (reward-cycle, option(pubkey)) pairs.
-    /// An option(pubkey) is defined for all reward cycles, but for epochs 2.4 and earlier, it will
-    /// be None.
-    fn find_new_aggregate_public_keys(
+    /// Clear out old reward cycles
+    fn free_old_reward_cycles(&mut self, rc: u64) {
+        if self.current_reward_sets.len() > 3 {
+            self.current_reward_sets.retain(|old_rc, _| {
+                if (*old_rc).saturating_add(2) < rc {
+                    test_debug!("Drop reward cycle info for cycle {}", old_rc);
+                    return false;
+                }
+                true
+            });
+        }
+    }
+
+    /// Refresh our view of the last three reward cycles
+    fn refresh_reward_cycles(
         &mut self,
         sortdb: &SortitionDB,
-        tip_sn: &BlockSnapshot,
         chainstate: &mut StacksChainState,
-        stacks_tip_block_id: &StacksBlockId,
-    ) -> Result<Vec<(u64, Option<Point>)>, net_error> {
-        let sort_tip_rc = self
+        tip_sn: &BlockSnapshot,
+    ) -> Result<(), net_error> {
+        let cur_rc = self
             .burnchain
             .block_height_to_reward_cycle(tip_sn.block_height)
             .expect("FATAL: sortition from before system start");
-        let next_agg_pubkey_rc = self
-            .aggregate_public_keys
-            .last_key_value()
-            .map(|(rc, _)| rc.saturating_add(1))
-            .unwrap_or(0);
-        let mut new_agg_pubkeys: Vec<_> = (next_agg_pubkey_rc..=sort_tip_rc)
-            .filter_map(|key_rc| {
-                let ih = sortdb.index_handle(&tip_sn.sortition_id);
-                let agg_pubkey_opt = if self.get_current_epoch().epoch_id < StacksEpochId::Epoch25 {
-                    None
-                } else {
-                    test_debug!(
-                        "Try to get aggregate public key for reward cycle {}",
-                        key_rc
-                    );
-                    NakamotoChainState::load_aggregate_public_key(
-                        sortdb,
-                        &ih,
-                        chainstate,
-                        self.burnchain.reward_cycle_to_block_height(key_rc),
-                        &stacks_tip_block_id,
-                        false,
-                    )
-                    .ok()
-                };
-                if agg_pubkey_opt.is_none() {
-                    return None;
-                }
-                Some((key_rc, agg_pubkey_opt))
-            })
-            .collect();
 
-        if new_agg_pubkeys.len() == 0 && self.aggregate_public_keys.len() == 0 {
-            // special case -- we're before epoch 3.0, so don't waste time doing this again
-            new_agg_pubkeys.push((sort_tip_rc, None));
+        let prev_rc = cur_rc.saturating_sub(1);
+        let prev_prev_rc = prev_rc.saturating_sub(1);
+        let ih = sortdb.index_handle(&tip_sn.sortition_id);
+
+        for rc in [cur_rc, prev_rc, prev_prev_rc] {
+            let rc_start_height = self.burnchain.reward_cycle_to_block_height(rc);
+            let Some(ancestor_sort_id) =
+                get_ancestor_sort_id(&ih, rc_start_height, &tip_sn.sortition_id)?
+            else {
+                // reward cycle is too far back for there to be an ancestor
+                continue;
+            };
+            let ancestor_ih = sortdb.index_handle(&ancestor_sort_id);
+            let anchor_hash_opt = ancestor_ih.get_last_anchor_block_hash()?;
+
+            if let Some(cached_rc_info) = self.current_reward_sets.get(&rc) {
+                if let Some(anchor_hash) = anchor_hash_opt.as_ref() {
+                    // careful -- the sortition DB stores a StacksBlockId's value (the tenure-start
+                    // StacksBlockId) as a BlockHeaderHash, since that's what it was designed to
+                    // deal with in the pre-Nakamoto days
+                    if cached_rc_info.anchor_block_id() == StacksBlockId(anchor_hash.0.clone())
+                        || cached_rc_info.anchor_block_hash == *anchor_hash
+                    {
+                        // cached reward set data is still valid
+                        continue;
+                    }
+                }
+            }
+
+            let Some((reward_set_info, anchor_block_header)) = load_nakamoto_reward_set(
+                rc,
+                &tip_sn.sortition_id,
+                &self.burnchain,
+                chainstate,
+                sortdb,
+                &OnChainRewardSetProvider::new(),
+            )
+            .map_err(|e| {
+                warn!(
+                    "Failed to load reward cycle info for cycle {}: {:?}",
+                    rc, &e
+                );
+                e
+            })
+            .unwrap_or(None) else {
+                continue;
+            };
+
+            let rc_info = CurrentRewardSet {
+                reward_cycle: rc,
+                reward_cycle_info: reward_set_info,
+                anchor_block_consensus_hash: anchor_block_header.consensus_hash,
+                anchor_block_hash: anchor_block_header.anchored_header.block_hash(),
+            };
+
+            test_debug!(
+                "Store cached reward set for reward cycle {} anchor block {}",
+                rc,
+                &rc_info.anchor_block_hash
+            );
+            self.current_reward_sets.insert(rc, rc_info);
         }
-        Ok(new_agg_pubkeys)
+        self.free_old_reward_cycles(cur_rc);
+        Ok(())
     }
 
     /// Refresh view of burnchain, if needed.
@@ -5442,21 +4819,22 @@ impl PeerNetwork {
             SortitionDB::get_canonical_stacks_chain_tip_hash_and_height(sortdb.conn())?;
 
         let burnchain_tip_changed = canonical_sn.block_height != self.chain_view.burn_block_height
-            || self.num_state_machine_passes == 0;
+            || self.num_state_machine_passes == 0
+            || canonical_sn.sortition_id != self.burnchain_tip.sortition_id;
+
         let stacks_tip_changed = self.stacks_tip != stacks_tip;
         let new_stacks_tip_block_id = StacksBlockId::new(&stacks_tip.0, &stacks_tip.1);
         let need_stackerdb_refresh = canonical_sn.canonical_stacks_tip_consensus_hash
             != self.burnchain_tip.canonical_stacks_tip_consensus_hash
             || burnchain_tip_changed
             || stacks_tip_changed;
+
+        if burnchain_tip_changed || stacks_tip_changed {
+            self.refresh_reward_cycles(sortdb, chainstate, &canonical_sn)?;
+        }
+
         let mut ret: HashMap<NeighborKey, Vec<StacksMessage>> = HashMap::new();
 
-        let aggregate_public_keys = self.find_new_aggregate_public_keys(
-            sortdb,
-            &canonical_sn,
-            chainstate,
-            &new_stacks_tip_block_id,
-        )?;
         let (parent_stacks_tip, tenure_start_block_id, stacks_tip_sn) = if stacks_tip_changed {
             let stacks_tip_sn =
                 SortitionDB::get_block_snapshot_consensus(sortdb.conn(), &stacks_tip.0)?;
@@ -5523,20 +4901,23 @@ impl PeerNetwork {
         }
 
         if burnchain_tip_changed {
-            // wake up the inv-sync and downloader -- we have potentially more sortitions
-            self.hint_sync_invs(self.chain_view.burn_stable_block_height);
+            if !ibd {
+                // wake up the inv-sync and downloader -- we have potentially more sortitions
+                self.hint_sync_invs(self.chain_view.burn_stable_block_height);
+
+                // set up the antientropy protocol to try pushing the latest block
+                // (helps if you're a miner who gets temporarily disconnected)
+                self.antientropy_last_push_ts = get_epoch_time_secs();
+                self.antientropy_start_reward_cycle =
+                    self.pox_id.num_inventory_reward_cycles().saturating_sub(1) as u64;
+            }
+
             self.hint_download_rescan(
                 self.chain_view
                     .burn_stable_block_height
                     .saturating_sub(self.burnchain.first_block_height),
-                false,
+                ibd,
             );
-
-            // set up the antientropy protocol to try pushing the latest block
-            // (helps if you're a miner who gets temporarily disconnected)
-            self.antientropy_last_push_ts = get_epoch_time_secs();
-            self.antientropy_start_reward_cycle =
-                self.pox_id.num_inventory_reward_cycles().saturating_sub(1) as u64;
 
             // update tx validation information
             self.ast_rules = SortitionDB::get_ast_rules(sortdb.conn(), canonical_sn.block_height)?;
@@ -5627,9 +5008,6 @@ impl PeerNetwork {
         self.stacks_tip = stacks_tip;
         self.stacks_tip_sn = stacks_tip_sn;
         self.parent_stacks_tip = parent_stacks_tip;
-        for (key_rc, agg_pubkey_opt) in aggregate_public_keys {
-            self.aggregate_public_keys.insert(key_rc, agg_pubkey_opt);
-        }
         self.tenure_start_block_id = tenure_start_block_id;
 
         Ok(ret)
@@ -5850,7 +5228,7 @@ impl PeerNetwork {
             &stacks_epoch.block_limit,
             &stacks_epoch.epoch_id,
         ) {
-            warn!("Transaction rejected from mempool, {}", &e.into_json(&txid));
+            info!("Transaction rejected from mempool, {}", &e.into_json(&txid));
             return false;
         }
 
@@ -6047,6 +5425,7 @@ impl PeerNetwork {
             self.num_state_machine_passes,
             self.num_inv_sync_passes,
             self.num_downloader_passes,
+            self.peers.len(),
             self.chain_view.burn_block_height,
             self.chain_view.rc_consensus_hash.clone(),
             self.get_stacker_db_configs_owned(),
@@ -6126,8 +5505,8 @@ mod test {
     use crate::net::atlas::*;
     use crate::net::codec::*;
     use crate::net::db::*;
-    use crate::net::relay::test::make_contract_tx;
     use crate::net::test::*;
+    use crate::net::tests::relay::epoch2x::make_contract_tx;
     use crate::net::*;
     use crate::util_lib::test::*;
 
@@ -6672,11 +6051,13 @@ mod test {
         while peer_1_mempool_txs < num_txs || peer_2_mempool_txs < num_txs {
             if let Ok(mut result) = peer_1.step_with_ibd(false) {
                 let lp = peer_1.network.local_peer.clone();
+                let burnchain = peer_1.network.burnchain.clone();
                 peer_1
                     .with_db_state(|sortdb, chainstate, relayer, mempool| {
                         relayer.process_network_result(
                             &lp,
                             &mut result,
+                            &burnchain,
                             sortdb,
                             chainstate,
                             mempool,
@@ -6690,11 +6071,13 @@ mod test {
 
             if let Ok(mut result) = peer_2.step_with_ibd(false) {
                 let lp = peer_2.network.local_peer.clone();
+                let burnchain = peer_2.network.burnchain.clone();
                 peer_2
                     .with_db_state(|sortdb, chainstate, relayer, mempool| {
                         relayer.process_network_result(
                             &lp,
                             &mut result,
+                            &burnchain,
                             sortdb,
                             chainstate,
                             mempool,
@@ -6859,11 +6242,13 @@ mod test {
         while peer_1_mempool_txs < num_txs || peer_2_mempool_txs < num_txs {
             if let Ok(mut result) = peer_1.step_with_ibd(false) {
                 let lp = peer_1.network.local_peer.clone();
+                let burnchain = peer_1.network.burnchain.clone();
                 peer_1
                     .with_db_state(|sortdb, chainstate, relayer, mempool| {
                         relayer.process_network_result(
                             &lp,
                             &mut result,
+                            &burnchain,
                             sortdb,
                             chainstate,
                             mempool,
@@ -6877,11 +6262,13 @@ mod test {
 
             if let Ok(mut result) = peer_2.step_with_ibd(false) {
                 let lp = peer_2.network.local_peer.clone();
+                let burnchain = peer_2.network.burnchain.clone();
                 peer_2
                     .with_db_state(|sortdb, chainstate, relayer, mempool| {
                         relayer.process_network_result(
                             &lp,
                             &mut result,
+                            &burnchain,
                             sortdb,
                             chainstate,
                             mempool,
@@ -7063,11 +6450,13 @@ mod test {
         while peer_1_mempool_txs < num_txs || peer_2_mempool_txs < num_txs / 2 {
             if let Ok(mut result) = peer_1.step_with_ibd(false) {
                 let lp = peer_1.network.local_peer.clone();
+                let burnchain = peer_1.network.burnchain.clone();
                 peer_1
                     .with_db_state(|sortdb, chainstate, relayer, mempool| {
                         relayer.process_network_result(
                             &lp,
                             &mut result,
+                            &burnchain,
                             sortdb,
                             chainstate,
                             mempool,
@@ -7081,11 +6470,13 @@ mod test {
 
             if let Ok(mut result) = peer_2.step_with_ibd(false) {
                 let lp = peer_2.network.local_peer.clone();
+                let burnchain = peer_2.network.burnchain.clone();
                 peer_2
                     .with_db_state(|sortdb, chainstate, relayer, mempool| {
                         relayer.process_network_result(
                             &lp,
                             &mut result,
+                            &burnchain,
                             sortdb,
                             chainstate,
                             mempool,
@@ -7247,11 +6638,13 @@ mod test {
         while peer_1_mempool_txs < num_txs || peer_2.network.mempool_sync_txs < (num_txs as u64) {
             if let Ok(mut result) = peer_1.step_with_ibd(false) {
                 let lp = peer_1.network.local_peer.clone();
+                let burnchain = peer_1.network.burnchain.clone();
                 peer_1
                     .with_db_state(|sortdb, chainstate, relayer, mempool| {
                         relayer.process_network_result(
                             &lp,
                             &mut result,
+                            &burnchain,
                             sortdb,
                             chainstate,
                             mempool,
@@ -7265,11 +6658,13 @@ mod test {
 
             if let Ok(mut result) = peer_2.step_with_ibd(false) {
                 let lp = peer_2.network.local_peer.clone();
+                let burnchain = peer_2.network.burnchain.clone();
                 peer_2
                     .with_db_state(|sortdb, chainstate, relayer, mempool| {
                         relayer.process_network_result(
                             &lp,
                             &mut result,
+                            &burnchain,
                             sortdb,
                             chainstate,
                             mempool,
@@ -7300,5 +6695,32 @@ mod test {
         peer_2.mempool.replace(mp);
 
         assert_eq!(peer_2_mempool_txs.len(), 128);
+    }
+
+    #[test]
+    fn test_is_connecting() {
+        let peer_1_config = TestPeerConfig::new(function_name!(), 0, 0);
+        let mut peer_1 = TestPeer::new(peer_1_config);
+        let nk = peer_1.to_neighbor().addr;
+
+        assert!(!peer_1.network.is_connecting(1));
+        assert!(!peer_1.network.is_connecting_neighbor(&nk));
+
+        let comms = PeerNetworkComms::new();
+        assert!(!comms.is_neighbor_connecting(&peer_1.network, &nk));
+
+        let sock = mio::net::TcpStream::connect(&SocketAddr::from((
+            [127, 0, 0, 1],
+            peer_1.config.server_port,
+        )))
+        .unwrap();
+        peer_1.network.connecting.insert(
+            1,
+            ConnectingPeer::new(sock, true, get_epoch_time_secs(), nk.clone()),
+        );
+
+        assert!(peer_1.network.is_connecting(1));
+        assert!(peer_1.network.is_connecting_neighbor(&nk));
+        assert!(comms.is_neighbor_connecting(&peer_1.network, &nk));
     }
 }

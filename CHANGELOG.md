@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to the versioning scheme outlined in the [README.md](README.md).
 
+## Unreleased
+
+### Added
+
+- Added support for Clarity 3
+  - Keywords / variable
+    - `tenure-height` added
+    - `stacks-block-height` added
+    - `block-height` removed
+  - Functions
+    - `get-stacks-block-info?` added
+    - `get-tenure-info?` added
+    - `get-block-info?` removed
+
+### Changed
+
+- Downgraded log messages about transactions from warning to info (#4697)
+
+### Fixed
+
+- Allow Nakamoto blocks to access the burn block associated with the current tenure (#4333)
+
 ## [2.5.0.0.3]
 
 This release fixes a regression in `2.5.0.0.0` from `2.4.0.1.0` caused by git merge

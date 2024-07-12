@@ -44,13 +44,14 @@ use stacks::net::db::LocalPeer;
 use stacks::net::relay::Relayer;
 use stacks::net::NetworkResult;
 use stacks_common::types::chainstate::{
-    BlockHeaderHash, BurnchainHeaderHash, StacksBlockId, VRFSeed,
+    BlockHeaderHash, BurnchainHeaderHash, StacksBlockId, StacksPublicKey, VRFSeed,
 };
 use stacks_common::types::StacksEpochId;
 use stacks_common::util::get_epoch_time_ms;
 use stacks_common::util::hash::Hash160;
 use stacks_common::util::vrf::{VRFProof, VRFPublicKey};
 
+use super::miner::MinerReason;
 use super::{
     BlockCommits, Config, Error as NakamotoNodeError, EventDispatcher, Keychain,
     BLOCK_PROCESSOR_STACK_SIZE,
@@ -63,6 +64,11 @@ use crate::neon_node::{
 use crate::run_loop::nakamoto::{Globals, RunLoop};
 use crate::run_loop::RegisteredKey;
 use crate::BitcoinRegtestController;
+
+#[cfg(test)]
+lazy_static::lazy_static! {
+    pub static ref TEST_SKIP_COMMIT_OP: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+}
 
 /// Command types for the Nakamoto relayer thread, issued to it by other threads
 pub enum RelayerDirective {
@@ -149,7 +155,7 @@ pub struct RelayerThread {
     relayer: Relayer,
 
     /// handle to the subordinate miner thread
-    miner_thread: Option<JoinHandle<()>>,
+    miner_thread: Option<JoinHandle<Result<(), NakamotoNodeError>>>,
     /// The relayer thread reads directives from the relay_rcv, but it also periodically wakes up
     ///  to check if it should issue a block commit or try to register a VRF key
     next_initiative: Instant,
@@ -185,8 +191,10 @@ impl RelayerThread {
 
         let bitcoin_controller = BitcoinRegtestController::new_dummy(config.clone());
 
+        let next_initiative_delay = config.node.next_initiative_delay;
+
         RelayerThread {
-            config: config,
+            config,
             sortdb,
             chainstate,
             mempool,
@@ -210,7 +218,7 @@ impl RelayerThread {
 
             miner_thread: None,
             is_miner,
-            next_initiative: Instant::now() + Duration::from_secs(10),
+            next_initiative: Instant::now() + Duration::from_millis(next_initiative_delay),
             last_committed: None,
         }
     }
@@ -251,6 +259,7 @@ impl RelayerThread {
             .process_network_result(
                 &self.local_peer,
                 &mut net_result,
+                &self.burnchain,
                 &mut self.sortdb,
                 &mut self.chainstate,
                 &mut self.mempool,
@@ -291,7 +300,7 @@ impl RelayerThread {
 
     /// Given the pointer to a recently processed sortition, see if we won the sortition.
     ///
-    /// Returns `true` if we won this last sortition.
+    /// Returns a directive to the relayer thread to either start, stop, or continue a tenure.
     pub fn process_sortition(
         &mut self,
         consensus_hash: ConsensusHash,
@@ -409,11 +418,16 @@ impl RelayerThread {
                 .unwrap_or_else(|| VRFProof::empty());
 
         // let's figure out the recipient set!
-        let recipients = get_nakamoto_next_recipients(&sort_tip, &mut self.sortdb, &self.burnchain)
-            .map_err(|e| {
-                error!("Relayer: Failure fetching recipient set: {:?}", e);
-                NakamotoNodeError::SnapshotNotFoundForChainTip
-            })?;
+        let recipients = get_nakamoto_next_recipients(
+            &sort_tip,
+            &mut self.sortdb,
+            &mut self.chainstate,
+            &self.burnchain,
+        )
+        .map_err(|e| {
+            error!("Relayer: Failure fetching recipient set: {:?}", e);
+            NakamotoNodeError::SnapshotNotFoundForChainTip
+        })?;
 
         let block_header =
             NakamotoChainState::get_block_header_by_consensus_hash(self.chainstate.db(), target_ch)
@@ -494,6 +508,7 @@ impl RelayerThread {
             .get_active()
             .ok_or_else(|| NakamotoNodeError::NoVRFKeyActive)?;
         let op = LeaderBlockCommitOp {
+            treatment: vec![],
             sunset_burn,
             block_header_hash: BlockHeaderHash(parent_block_id.0),
             burn_fee: rest_commit,
@@ -532,18 +547,20 @@ impl RelayerThread {
     fn create_block_miner(
         &mut self,
         registered_key: RegisteredKey,
-        last_burn_block: BlockSnapshot,
+        burn_election_block: BlockSnapshot,
+        burn_tip: BlockSnapshot,
         parent_tenure_id: StacksBlockId,
+        reason: MinerReason,
     ) -> Result<BlockMinerThread, NakamotoNodeError> {
-        if fault_injection_skip_mining(&self.config.node.rpc_bind, last_burn_block.block_height) {
+        if fault_injection_skip_mining(&self.config.node.rpc_bind, burn_tip.block_height) {
             debug!(
                 "Relayer: fault injection skip mining at block height {}",
-                last_burn_block.block_height
+                burn_tip.block_height
             );
             return Err(NakamotoNodeError::FaultInjection);
         }
 
-        let burn_header_hash = last_burn_block.burn_header_hash.clone();
+        let burn_header_hash = burn_tip.burn_header_hash.clone();
         let burn_chain_sn = SortitionDB::get_canonical_burn_chain_tip(self.sortdb.conn())
             .expect("FATAL: failed to query sortition DB for canonical burn chain tip");
 
@@ -560,20 +577,31 @@ impl RelayerThread {
 
         debug!(
             "Relayer: Spawn tenure thread";
-            "height" => last_burn_block.block_height,
+            "height" => burn_tip.block_height,
             "burn_header_hash" => %burn_header_hash,
             "parent_tenure_id" => %parent_tenure_id,
+            "reason" => %reason,
+            "burn_election_block.consensus_hash" => %burn_election_block.consensus_hash,
+            "burn_tip.consensus_hash" => %burn_tip.consensus_hash,
         );
 
-        let miner_thread_state =
-            BlockMinerThread::new(self, registered_key, last_burn_block, parent_tenure_id);
+        let miner_thread_state = BlockMinerThread::new(
+            self,
+            registered_key,
+            burn_election_block,
+            burn_tip,
+            parent_tenure_id,
+            reason,
+        );
         Ok(miner_thread_state)
     }
 
     fn start_new_tenure(
         &mut self,
         parent_tenure_start: StacksBlockId,
+        block_election_snapshot: BlockSnapshot,
         burn_tip: BlockSnapshot,
+        reason: MinerReason,
     ) -> Result<(), NakamotoNodeError> {
         // when starting a new tenure, block the mining thread if its currently running.
         // the new mining thread will join it (so that the new mining thread stalls, not the relayer)
@@ -586,7 +614,13 @@ impl RelayerThread {
                 warn!("Trying to start new tenure, but no VRF key active");
                 NakamotoNodeError::NoVRFKeyActive
             })?;
-        let new_miner_state = self.create_block_miner(vrf_key, burn_tip, parent_tenure_start)?;
+        let new_miner_state = self.create_block_miner(
+            vrf_key,
+            block_election_snapshot,
+            burn_tip,
+            parent_tenure_start,
+            reason,
+        )?;
 
         let new_miner_handle = std::thread::Builder::new()
             .name(format!("miner.{parent_tenure_start}"))
@@ -628,6 +662,81 @@ impl RelayerThread {
         Ok(())
     }
 
+    fn continue_tenure(&mut self, new_burn_view: ConsensusHash) -> Result<(), NakamotoNodeError> {
+        if let Err(e) = self.stop_tenure() {
+            error!("Relayer: Failed to stop tenure: {:?}", e);
+            return Ok(());
+        }
+        debug!("Relayer: successfully stopped tenure.");
+        // Check if we should undergo a tenure change to switch to the new burn view
+        let burn_tip =
+            SortitionDB::get_block_snapshot_consensus(self.sortdb.conn(), &new_burn_view)
+                .map_err(|e| {
+                    error!("Relayer: failed to get block snapshot for new burn view: {e:?}");
+                    NakamotoNodeError::SnapshotNotFoundForChainTip
+                })?
+                .ok_or_else(|| {
+                    error!("Relayer: failed to get block snapshot for new burn view");
+                    NakamotoNodeError::SnapshotNotFoundForChainTip
+                })?;
+
+        let (canonical_stacks_tip_ch, canonical_stacks_tip_bh) =
+            SortitionDB::get_canonical_stacks_chain_tip_hash(self.sortdb.conn()).unwrap();
+        let canonical_stacks_tip =
+            StacksBlockId::new(&canonical_stacks_tip_ch, &canonical_stacks_tip_bh);
+        let block_election_snapshot =
+            SortitionDB::get_block_snapshot_consensus(self.sortdb.conn(), &canonical_stacks_tip_ch)
+                .map_err(|e| {
+                    error!("Relayer: failed to get block snapshot for canonical tip: {e:?}");
+                    NakamotoNodeError::SnapshotNotFoundForChainTip
+                })?
+                .ok_or_else(|| {
+                    error!("Relayer: failed to get block snapshot for canonical tip");
+                    NakamotoNodeError::SnapshotNotFoundForChainTip
+                })?;
+
+        let Some(ref mining_key) = self.config.miner.mining_key else {
+            return Ok(());
+        };
+        let mining_pkh = Hash160::from_node_public_key(&StacksPublicKey::from_private(mining_key));
+
+        let last_winner_snapshot = {
+            let ih = self.sortdb.index_handle(&burn_tip.sortition_id);
+            ih.get_last_snapshot_with_sortition(burn_tip.block_height)
+                .map_err(|e| {
+                    error!("Relayer: failed to get last snapshot with sortition: {e:?}");
+                    NakamotoNodeError::SnapshotNotFoundForChainTip
+                })?
+        };
+
+        if last_winner_snapshot.miner_pk_hash != Some(mining_pkh) {
+            debug!("Relayer: the miner did not win the last sortition. No tenure to continue.";
+                   "current_mining_pkh" => %mining_pkh,
+                   "last_winner_snapshot.miner_pk_hash" => ?last_winner_snapshot.miner_pk_hash,
+            );
+            return Ok(());
+        } else {
+            debug!("Relayer: the miner won the last sortition. Continuing tenure.");
+        }
+
+        match self.start_new_tenure(
+            canonical_stacks_tip, // For tenure extend, we should be extending off the canonical tip
+            block_election_snapshot,
+            burn_tip,
+            MinerReason::Extended {
+                burn_view_consensus_hash: new_burn_view,
+            },
+        ) {
+            Ok(()) => {
+                debug!("Relayer: successfully started new tenure.");
+            }
+            Err(e) => {
+                error!("Relayer: Failed to start new tenure: {:?}", e);
+            }
+        }
+        Ok(())
+    }
+
     fn handle_sortition(
         &mut self,
         consensus_hash: ConsensusHash,
@@ -641,7 +750,12 @@ impl RelayerThread {
             MinerDirective::BeginTenure {
                 parent_tenure_start,
                 burnchain_tip,
-            } => match self.start_new_tenure(parent_tenure_start, burnchain_tip) {
+            } => match self.start_new_tenure(
+                parent_tenure_start,
+                burnchain_tip.clone(),
+                burnchain_tip,
+                MinerReason::BlockFound,
+            ) {
                 Ok(()) => {
                     debug!("Relayer: successfully started new tenure.");
                 }
@@ -649,16 +763,14 @@ impl RelayerThread {
                     error!("Relayer: Failed to start new tenure: {:?}", e);
                 }
             },
-            MinerDirective::ContinueTenure { new_burn_view: _ } => {
-                // TODO: in this case, we eventually want to undergo a tenure
-                //  change to switch to the new burn view, but right now, we will
-                //  simply end our current tenure if it exists
-                match self.stop_tenure() {
+            MinerDirective::ContinueTenure { new_burn_view } => {
+                match self.continue_tenure(new_burn_view) {
                     Ok(()) => {
-                        debug!("Relayer: successfully stopped tenure.");
+                        debug!("Relayer: successfully handled continue tenure.");
                     }
                     Err(e) => {
-                        error!("Relayer: Failed to stop tenure: {:?}", e);
+                        error!("Relayer: Failed to continue tenure: {:?}", e);
+                        return false;
                     }
                 }
             }
@@ -682,6 +794,16 @@ impl RelayerThread {
     ) -> Result<(), NakamotoNodeError> {
         let (last_committed_at, target_epoch_id, commit) =
             self.make_block_commit(&tenure_start_ch, &tenure_start_bh)?;
+        #[cfg(test)]
+        {
+            if TEST_SKIP_COMMIT_OP.lock().unwrap().unwrap_or(false) {
+                //if let Some((last_committed, ..)) = self.last_committed.as_ref() {
+                //    if last_committed.consensus_hash == last_committed_at.consensus_hash {
+                warn!("Relayer: not submitting block-commit to bitcoin network due to test directive.");
+                return Ok(());
+                //}
+            }
+        }
         let mut op_signer = self.keychain.generate_op_signer();
         let txid = self
             .bitcoin_controller
@@ -717,25 +839,22 @@ impl RelayerThread {
             return None;
         }
 
-        // do we need a VRF key registration?
-        if matches!(
-            self.globals.get_leader_key_registration_state(),
-            LeaderKeyRegistrationState::Inactive
-        ) {
-            let Ok(sort_tip) = SortitionDB::get_canonical_burn_chain_tip(self.sortdb.conn()) else {
-                warn!("Failed to fetch sortition tip while needing to register VRF key");
+        match self.globals.get_leader_key_registration_state() {
+            // do we need a VRF key registration?
+            LeaderKeyRegistrationState::Inactive => {
+                let Ok(sort_tip) = SortitionDB::get_canonical_burn_chain_tip(self.sortdb.conn())
+                else {
+                    warn!("Failed to fetch sortition tip while needing to register VRF key");
+                    return None;
+                };
+                return Some(RelayerDirective::RegisterKey(sort_tip));
+            }
+            // are we still waiting on a pending registration?
+            LeaderKeyRegistrationState::Pending(..) => {
                 return None;
-            };
-            return Some(RelayerDirective::RegisterKey(sort_tip));
-        }
-
-        // are we still waiting on a pending registration?
-        if !matches!(
-            self.globals.get_leader_key_registration_state(),
-            LeaderKeyRegistrationState::Active(_)
-        ) {
-            return None;
-        }
+            }
+            LeaderKeyRegistrationState::Active(_) => {}
+        };
 
         // has there been a new sortition
         let Ok(sort_tip) = SortitionDB::get_canonical_burn_chain_tip(self.sortdb.conn()) else {
@@ -804,10 +923,12 @@ impl RelayerThread {
     pub fn main(mut self, relay_rcv: Receiver<RelayerDirective>) {
         debug!("relayer thread ID is {:?}", std::thread::current().id());
 
-        self.next_initiative = Instant::now() + Duration::from_secs(10);
+        self.next_initiative =
+            Instant::now() + Duration::from_millis(self.config.node.next_initiative_delay);
         while self.globals.keep_running() {
             let directive = if Instant::now() >= self.next_initiative {
-                self.next_initiative = Instant::now() + Duration::from_secs(10);
+                self.next_initiative =
+                    Instant::now() + Duration::from_millis(self.config.node.next_initiative_delay);
                 self.initiative()
             } else {
                 None

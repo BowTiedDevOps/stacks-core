@@ -26,6 +26,7 @@ extern crate stacks_common;
 #[macro_use(o, slog_log, slog_trace, slog_debug, slog_info, slog_warn, slog_error)]
 extern crate slog;
 
+use stacks_common::types::MempoolCollectionBehavior;
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "arm")))]
 use tikv_jemallocator::Jemalloc;
 
@@ -33,10 +34,11 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
 use std::io::BufReader;
+use std::time::Instant;
 use std::{env, fs, io, process, thread};
 
 use blockstack_lib::burnchains::bitcoin::indexer::{
@@ -47,8 +49,12 @@ use blockstack_lib::burnchains::db::{BurnchainBlockData, BurnchainDB};
 use blockstack_lib::burnchains::{
     Address, Burnchain, PoxConstants, Txid, BLOCKSTACK_MAGIC_MAINNET,
 };
-use blockstack_lib::chainstate::burn::db::sortdb::SortitionDB;
-use blockstack_lib::chainstate::burn::ConsensusHash;
+use blockstack_lib::chainstate::burn::db::sortdb::{
+    get_block_commit_by_txid, SortitionDB, SortitionHandle,
+};
+use blockstack_lib::chainstate::burn::operations::BlockstackOperationType;
+use blockstack_lib::chainstate::burn::{BlockSnapshot, ConsensusHash};
+use blockstack_lib::chainstate::coordinator::{get_reward_cycle_info, OnChainRewardSetProvider};
 use blockstack_lib::chainstate::nakamoto::NakamotoChainState;
 use blockstack_lib::chainstate::stacks::db::blocks::{DummyEventDispatcher, StagingBlock};
 use blockstack_lib::chainstate::stacks::db::{
@@ -61,7 +67,6 @@ use blockstack_lib::chainstate::stacks::{StacksBlockHeader, *};
 use blockstack_lib::clarity::vm::costs::ExecutionCost;
 use blockstack_lib::clarity::vm::types::StacksAddressExtensions;
 use blockstack_lib::clarity::vm::ClarityVersion;
-use blockstack_lib::clarity_cli;
 use blockstack_lib::clarity_cli::vm_execute;
 use blockstack_lib::core::{MemPoolDB, *};
 use blockstack_lib::cost_estimates::metrics::UnitMetric;
@@ -72,6 +77,7 @@ use blockstack_lib::net::relay::Relayer;
 use blockstack_lib::net::StacksMessage;
 use blockstack_lib::util_lib::db::sqlite_open;
 use blockstack_lib::util_lib::strings::UrlString;
+use blockstack_lib::{clarity_cli, util_lib};
 use libstackerdb::StackerDBChunkData;
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, OpenFlags};
@@ -87,6 +93,7 @@ use stacks_common::util::secp256k1::{Secp256k1PrivateKey, Secp256k1PublicKey};
 use stacks_common::util::vrf::VRFProof;
 use stacks_common::util::{get_epoch_time_ms, log, sleep_ms};
 
+#[cfg_attr(test, mutants::skip)]
 fn main() {
     let mut argv: Vec<String> = env::args().collect();
     if argv.len() < 2 {
@@ -398,7 +405,7 @@ Given a <working-dir>, obtain a 2100 header hash block inventory (with an empty 
                 "Usage: {} can-download-microblock <working-dir>
 
 Given a <working-dir>, obtain a 2100 header hash inventory (with an empty header cache), and then
-check if the associated microblocks can be downloaded 
+check if the associated microblocks can be downloaded
 ",
                 argv[0]
             );
@@ -637,7 +644,7 @@ simulating a miner.
 
         let result = StacksBlockBuilder::build_anchored_block(
             &chain_state,
-            &sort_db.index_conn(),
+            &sort_db.index_handle(&chain_tip.sortition_id),
             &mut mempool_db,
             &parent_header,
             chain_tip.total_burn,
@@ -874,6 +881,7 @@ simulating a miner.
             eprintln!("Usage:");
             eprintln!("  {n} <chainstate_path>");
             eprintln!("  {n} <chainstate_path> prefix <index-block-hash-prefix>");
+            eprintln!("  {n} <chainstate_path> index-range <start_block> <end_block>");
             eprintln!("  {n} <chainstate_path> range <start_block> <end_block>");
             eprintln!("  {n} <chainstate_path> <first|last> <block_count>");
             process::exit(1);
@@ -881,6 +889,7 @@ simulating a miner.
         if argv.len() < 2 {
             print_help_and_exit();
         }
+        let start = Instant::now();
         let stacks_path = &argv[2];
         let mode = argv.get(3).map(String::as_str);
         let staging_blocks_db_path = format!("{stacks_path}/mainnet/chainstate/vm/index.sqlite");
@@ -890,11 +899,11 @@ simulating a miner.
 
         let query = match mode {
             Some("prefix") => format!(
-                "SELECT index_block_hash FROM staging_blocks WHERE index_block_hash LIKE \"{}%\"",
+                "SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0 AND index_block_hash LIKE \"{}%\"",
                 argv[4]
             ),
             Some("first") => format!(
-                "SELECT index_block_hash FROM staging_blocks ORDER BY height ASC LIMIT {}",
+                "SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0 ORDER BY height ASC LIMIT {}",
                 argv[4]
             ),
             Some("range") => {
@@ -904,15 +913,23 @@ simulating a miner.
                 let arg5 = argv[5].parse::<u64>().expect("<end_block> not a valid u64");
                 let start = arg4.saturating_sub(1);
                 let blocks = arg5.saturating_sub(arg4);
-                format!("SELECT index_block_hash FROM staging_blocks ORDER BY height ASC LIMIT {start}, {blocks}")
+                format!("SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0 ORDER BY height ASC LIMIT {start}, {blocks}")
+            }
+            Some("index-range") => {
+                let start = argv[4]
+                    .parse::<u64>()
+                    .expect("<start_block> not a valid u64");
+                let end = argv[5].parse::<u64>().expect("<end_block> not a valid u64");
+                let blocks = end.saturating_sub(start);
+                format!("SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0 ORDER BY index_block_hash ASC LIMIT {start}, {blocks}")
             }
             Some("last") => format!(
-                "SELECT index_block_hash FROM staging_blocks ORDER BY height DESC LIMIT {}",
+                "SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0 ORDER BY height DESC LIMIT {}",
                 argv[4]
             ),
             Some(_) => print_help_and_exit(),
             // Default to ALL blocks
-            None => "SELECT index_block_hash FROM staging_blocks".into(),
+            None => "SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0".into(),
         };
 
         let mut stmt = conn.prepare(&query).unwrap();
@@ -931,7 +948,7 @@ simulating a miner.
             }
             replay_block(stacks_path, index_block_hash);
         }
-        println!("Finished!");
+        println!("Finished. run_time_seconds = {}", start.elapsed().as_secs());
         process::exit(0);
     }
 
@@ -1015,6 +1032,12 @@ simulating a miner.
 
         println!("{}", &serde_json::to_string(&chunk).unwrap());
         process::exit(0);
+    }
+
+    if argv[1] == "analyze-sortition-mev" {
+        analyze_sortition_mev(argv);
+        // should be unreachable
+        process::exit(1);
     }
 
     if argv[1] == "replay-chainstate" {
@@ -1169,7 +1192,7 @@ simulating a miner.
                 // simulate the p2p refreshing itself
                 // update p2p's read-only view of the unconfirmed state
                 p2p_chainstate
-                    .refresh_unconfirmed_state(&p2p_new_sortition_db.index_conn())
+                    .refresh_unconfirmed_state(&p2p_new_sortition_db.index_handle_at_tip())
                     .expect("Failed to open unconfirmed Clarity state");
 
                 sleep_ms(100);
@@ -1322,6 +1345,7 @@ simulating a miner.
     }
 }
 
+#[cfg_attr(test, mutants::skip)]
 fn tip_mine() {
     let argv: Vec<String> = env::args().collect();
     if argv.len() < 6 {
@@ -1361,13 +1385,11 @@ simulating a miner.
     let mut mempool_db = MemPoolDB::open(true, chain_id, &chain_state_path, estimator, metric)
         .expect("Failed to open mempool db");
 
-    {
-        info!("Clearing mempool");
-        let mut tx = mempool_db.tx_begin().unwrap();
-        let min_height = u32::MAX as u64;
-        MemPoolDB::garbage_collect(&mut tx, min_height, None).unwrap();
-        tx.commit().unwrap();
-    }
+    info!("Clearing mempool");
+    let min_height = u32::MAX as u64;
+    mempool_db
+        .garbage_collect(min_height, &MempoolCollectionBehavior::ByStacksHeight, None)
+        .unwrap();
 
     let header_tip = NakamotoChainState::get_canonical_block_header(chain_state.db(), &sort_db)
         .unwrap()
@@ -1512,7 +1534,7 @@ simulating a miner.
 
     let result = StacksBlockBuilder::build_anchored_block(
         &chain_state,
-        &sort_db.index_conn(),
+        &sort_db.index_handle_at_tip(),
         &mut mempool_db,
         &parent_header,
         chain_tip.total_burn,
@@ -1646,7 +1668,8 @@ fn replay_block(stacks_path: &str, index_block_hash_hex: &str) {
         return;
     };
 
-    let block = StacksChainState::extract_stacks_block(&next_staging_block).unwrap();
+    let block =
+        StacksChainState::extract_stacks_block(&next_staging_block).expect("Failed to get block");
     let block_size = next_staging_block.block_data.len() as u64;
 
     let parent_block_header = match &parent_header_info.anchored_header {
@@ -1730,4 +1753,225 @@ fn replay_block(stacks_path: &str, index_block_hash_hex: &str) {
             process::exit(1);
         }
     };
+}
+
+/// Perform an analysis of the anti-MEV algorithm in epoch 3.0, vis-a-vis the status quo.
+/// Results are printed to stdout.
+/// Exits with 0 on success, and 1 on failure.
+fn analyze_sortition_mev(argv: Vec<String>) {
+    if argv.len() < 7 || (argv.len() >= 7 && argv.len() % 2 != 1) {
+        eprintln!(
+            "Usage: {} /path/to/burnchain/db /path/to/sortition/db /path/to/chainstate/db start_height end_height [advantage_miner advantage_burn ..]",
+            &argv[0]
+        );
+        process::exit(1);
+    }
+
+    let burnchaindb_path = argv[2].clone();
+    let sortdb_path = argv[3].clone();
+    let chainstate_path = argv[4].clone();
+    let start_height: u64 = argv[5].parse().unwrap();
+    let end_height: u64 = argv[6].parse().unwrap();
+
+    let mut advantages = HashMap::new();
+    if argv.len() >= 7 {
+        let mut i = 7;
+        while i + 2 < argv.len() {
+            let advantaged_miner = argv[i].clone();
+            let advantage: u64 = argv[i + 1].parse().unwrap();
+            advantages.insert(advantaged_miner, advantage);
+            i += 2;
+        }
+    }
+
+    let mut sortdb =
+        SortitionDB::open(&sortdb_path, true, PoxConstants::mainnet_default()).unwrap();
+    sortdb.dryrun = true;
+    let burnchain = Burnchain::new(&burnchaindb_path, "bitcoin", "mainnet").unwrap();
+    let burnchaindb = BurnchainDB::connect(&burnchaindb_path, &burnchain, true).unwrap();
+    let (mut chainstate, _) =
+        StacksChainState::open(true, 0x00000001, &chainstate_path, None).unwrap();
+
+    let mut wins_epoch2 = BTreeMap::new();
+    let mut wins_epoch3 = BTreeMap::new();
+
+    for height in start_height..end_height {
+        debug!("Get ancestor snapshots for {}", height);
+        let (tip_sort_id, parent_ancestor_sn, ancestor_sn) = {
+            let mut sort_tx = sortdb.tx_begin_at_tip();
+            let tip_sort_id = sort_tx.tip();
+            let ancestor_sn = sort_tx
+                .get_block_snapshot_by_height(height)
+                .unwrap()
+                .unwrap();
+            let parent_ancestor_sn = sort_tx
+                .get_block_snapshot_by_height(height - 1)
+                .unwrap()
+                .unwrap();
+            (tip_sort_id, parent_ancestor_sn, ancestor_sn)
+        };
+
+        let mut burn_block =
+            BurnchainDB::get_burnchain_block(burnchaindb.conn(), &ancestor_sn.burn_header_hash)
+                .unwrap();
+
+        debug!(
+            "Get reward cycle info at {}",
+            burn_block.header.block_height
+        );
+        let rc_info_opt = get_reward_cycle_info(
+            burn_block.header.block_height,
+            &burn_block.header.parent_block_hash,
+            &tip_sort_id,
+            &burnchain,
+            &burnchaindb,
+            &mut chainstate,
+            &mut sortdb,
+            &OnChainRewardSetProvider::new(),
+            false,
+        )
+        .unwrap();
+
+        let mut ops = burn_block.ops.clone();
+        for op in ops.iter_mut() {
+            if let BlockstackOperationType::LeaderBlockCommit(op) = op {
+                if let Some(extra_burn) = advantages.get(&op.apparent_sender.to_string()) {
+                    debug!(
+                        "Miner {} gets {} extra burn fee",
+                        &op.apparent_sender.to_string(),
+                        extra_burn
+                    );
+                    op.burn_fee += *extra_burn;
+                }
+            }
+        }
+        burn_block.ops = ops;
+
+        debug!("Re-evaluate sortition at height {}", height);
+        let (next_sn, state_transition) = sortdb
+            .evaluate_sortition(
+                &burn_block.header,
+                burn_block.ops.clone(),
+                &burnchain,
+                &tip_sort_id,
+                rc_info_opt,
+                |_| (),
+            )
+            .unwrap();
+
+        assert_eq!(next_sn.block_height, ancestor_sn.block_height);
+        assert_eq!(next_sn.burn_header_hash, ancestor_sn.burn_header_hash);
+
+        let mut sort_tx = sortdb.tx_begin_at_tip();
+        let tip_pox_id = sort_tx.get_pox_id().unwrap();
+        let next_sn_nakamoto = BlockSnapshot::make_snapshot_in_epoch(
+            &mut sort_tx,
+            &burnchain,
+            &ancestor_sn.sortition_id,
+            &tip_pox_id,
+            &parent_ancestor_sn,
+            &burn_block.header,
+            &state_transition,
+            0,
+            StacksEpochId::Epoch30,
+        )
+        .unwrap();
+
+        assert_eq!(next_sn.block_height, next_sn_nakamoto.block_height);
+        assert_eq!(next_sn.burn_header_hash, next_sn_nakamoto.burn_header_hash);
+
+        let winner_epoch2 = get_block_commit_by_txid(
+            &sort_tx,
+            &ancestor_sn.sortition_id,
+            &next_sn.winning_block_txid,
+        )
+        .unwrap()
+        .map(|cmt| format!("{:?}", &cmt.apparent_sender.to_string()))
+        .unwrap_or("(null)".to_string());
+
+        let winner_epoch3 = get_block_commit_by_txid(
+            &sort_tx,
+            &ancestor_sn.sortition_id,
+            &next_sn_nakamoto.winning_block_txid,
+        )
+        .unwrap()
+        .map(|cmt| format!("{:?}", &cmt.apparent_sender.to_string()))
+        .unwrap_or("(null)".to_string());
+
+        wins_epoch2.insert(
+            (next_sn.block_height, next_sn.burn_header_hash),
+            winner_epoch2,
+        );
+        wins_epoch3.insert(
+            (
+                next_sn_nakamoto.block_height,
+                next_sn_nakamoto.burn_header_hash,
+            ),
+            winner_epoch3,
+        );
+    }
+
+    let mut all_wins_epoch2 = BTreeMap::new();
+    let mut all_wins_epoch3 = BTreeMap::new();
+
+    println!("Wins epoch 2");
+    println!("------------");
+    println!("height,burn_header_hash,winner");
+    for ((height, bhh), winner) in wins_epoch2.iter() {
+        println!("{},{},{}", height, bhh, winner);
+        if let Some(cnt) = all_wins_epoch2.get_mut(winner) {
+            *cnt += 1;
+        } else {
+            all_wins_epoch2.insert(winner, 1);
+        }
+    }
+
+    println!("------------");
+    println!("Wins epoch 3");
+    println!("------------");
+    println!("height,burn_header_hash,winner");
+    for ((height, bhh), winner) in wins_epoch3.iter() {
+        println!("{},{},{}", height, bhh, winner);
+        if let Some(cnt) = all_wins_epoch3.get_mut(winner) {
+            *cnt += 1;
+        } else {
+            all_wins_epoch3.insert(winner, 1);
+        }
+    }
+
+    println!("---------------");
+    println!("Differences");
+    println!("---------------");
+    println!("height,burn_header_hash,winner_epoch2,winner_epoch3");
+    for ((height, bhh), winner) in wins_epoch2.iter() {
+        let Some(epoch3_winner) = wins_epoch3.get(&(*height, *bhh)) else {
+            continue;
+        };
+        if epoch3_winner != winner {
+            println!("{},{},{},{}", height, bhh, winner, epoch3_winner);
+        }
+    }
+
+    println!("---------------");
+    println!("All epoch2 wins");
+    println!("---------------");
+    println!("miner,count");
+    for (winner, count) in all_wins_epoch2.iter() {
+        println!("{},{}", winner, count);
+    }
+
+    println!("---------------");
+    println!("All epoch3 wins");
+    println!("---------------");
+    println!("miner,count,degradation");
+    for (winner, count) in all_wins_epoch3.into_iter() {
+        let degradation = (count as f64)
+            / (all_wins_epoch2
+                .get(&winner)
+                .map(|cnt| *cnt as f64)
+                .unwrap_or(0.00000000000001f64));
+        println!("{},{},{}", &winner, count, degradation);
+    }
+
+    process::exit(0);
 }

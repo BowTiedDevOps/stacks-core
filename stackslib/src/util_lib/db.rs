@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::backtrace::Backtrace;
 use std::io::Error as IOError;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
@@ -34,8 +35,10 @@ use stacks_common::util::hash::to_hex;
 use stacks_common::util::secp256k1::{Secp256k1PrivateKey, Secp256k1PublicKey};
 use stacks_common::util::sleep_ms;
 
+use crate::chainstate::burn::db::sortdb::SortitionDB;
 use crate::chainstate::stacks::index::marf::{MarfConnection, MarfTransaction, MARF};
 use crate::chainstate::stacks::index::{Error as MARFError, MARFValue, MarfTrieId};
+use crate::core::{StacksEpoch, StacksEpochId};
 
 pub type DBConn = rusqlite::Connection;
 pub type DBTx<'a> = rusqlite::Transaction<'a>;
@@ -630,6 +633,16 @@ impl<'a, C, T: MarfTrieId> IndexDBConn<'a, C, T> {
     pub fn conn(&self) -> &DBConn {
         self.index.sqlite_conn()
     }
+
+    pub fn get_stacks_epoch_by_epoch_id(&self, epoch_id: &StacksEpochId) -> Option<StacksEpoch> {
+        SortitionDB::get_stacks_epoch_by_epoch_id(self.conn(), epoch_id)
+            .expect("BUG: failed to get epoch for epoch id")
+    }
+
+    pub fn get_stacks_epoch(&self, height: u32) -> Option<StacksEpoch> {
+        SortitionDB::get_stacks_epoch(self.conn(), height as u64)
+            .expect("BUG: failed to get epoch for burn block height")
+    }
 }
 
 impl<'a, C, T: MarfTrieId> Deref for IndexDBConn<'a, C, T> {
@@ -672,7 +685,14 @@ pub fn tx_busy_handler(run_count: i32) -> bool {
 
     debug!(
         "Database is locked; sleeping {}ms and trying again",
-        &sleep_count
+        &sleep_count;
+        "backtrace" => ?{
+            if run_count > 10 && run_count % 10 == 0 {
+                Some(Backtrace::capture())
+            } else {
+                None
+            }
+        },
     );
 
     sleep_ms(sleep_count);

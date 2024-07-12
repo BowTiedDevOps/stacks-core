@@ -33,11 +33,14 @@ use super::RunLoopCallbacks;
 use crate::burnchains::{make_bitcoin_indexer, Error};
 use crate::globals::NeonGlobals as Globals;
 use crate::monitoring::{start_serving_monitoring_metrics, MonitoringError};
-use crate::neon_node::{StacksNode, BLOCK_PROCESSOR_STACK_SIZE, RELAYER_MAX_BUFFER};
+use crate::neon_node::{
+    LeaderKeyRegistrationState, StacksNode, BLOCK_PROCESSOR_STACK_SIZE, RELAYER_MAX_BUFFER,
+};
 use crate::node::{
     get_account_balances, get_account_lockups, get_names, get_namespaces,
     use_test_genesis_chainstate,
 };
+use crate::run_loop::boot_nakamoto::Neon2NakaData;
 use crate::syncctl::{PoxSyncWatchdog, PoxSyncWatchdogComms};
 use crate::{
     run_loop, BitcoinRegtestController, BurnchainController, Config, EventDispatcher, Keychain,
@@ -373,7 +376,7 @@ impl RunLoop {
                     return true;
                 }
             }
-            if self.config.node.mock_mining {
+            if self.config.get_node_config(false).mock_mining {
                 info!("No UTXOs found, but configured to mock mine");
                 return true;
             } else {
@@ -999,7 +1002,13 @@ impl RunLoop {
     /// It will start the burnchain (separate thread), set-up a channel in
     /// charge of coordinating the new blocks coming from the burnchain and
     /// the nodes, taking turns on tenures.  
-    pub fn start(&mut self, burnchain_opt: Option<Burnchain>, mut mine_start: u64) {
+    ///
+    /// Returns `Option<NeonGlobals>` so that data can be passed to `NakamotoNode`
+    pub fn start(
+        &mut self,
+        burnchain_opt: Option<Burnchain>,
+        mut mine_start: u64,
+    ) -> Option<Neon2NakaData> {
         let (coordinator_receivers, coordinator_senders) = self
             .coordinator_channels
             .take()
@@ -1018,12 +1027,12 @@ impl RunLoop {
             Ok(burnchain_controller) => burnchain_controller,
             Err(burnchain_error::ShutdownInitiated) => {
                 info!("Exiting stacks-node");
-                return;
+                return None;
             }
             Err(e) => {
                 error!("Error initializing burnchain: {}", e);
                 info!("Exiting stacks-node");
-                return;
+                return None;
             }
         };
 
@@ -1046,6 +1055,7 @@ impl RunLoop {
             self.pox_watchdog_comms.clone(),
             self.should_keep_running.clone(),
             mine_start,
+            LeaderKeyRegistrationState::default(),
         );
         self.set_globals(globals.clone());
 
@@ -1142,11 +1152,15 @@ impl RunLoop {
 
                 globals.coord().stop_chains_coordinator();
                 coordinator_thread_handle.join().unwrap();
-                node.join();
+                let peer_network = node.join();
                 liveness_thread.join().unwrap();
 
+                // Data that will be passed to Nakamoto run loop
+                // Only gets transfered on clean shutdown of neon run loop
+                let data_to_naka = Neon2NakaData::new(globals, peer_network);
+
                 info!("Exiting stacks-node");
-                break;
+                break Some(data_to_naka);
             }
 
             let remote_chain_height = burnchain.get_headers_height() - 1;
@@ -1269,7 +1283,7 @@ impl RunLoop {
                         if !node.relayer_sortition_notify() {
                             // relayer hung up, exit.
                             error!("Runloop: Block relayer and miner hung up, exiting.");
-                            return;
+                            return None;
                         }
                     }
 
@@ -1343,7 +1357,7 @@ impl RunLoop {
                     if !node.relayer_issue_tenure(ibd) {
                         // relayer hung up, exit.
                         error!("Runloop: Block relayer and miner hung up, exiting.");
-                        break;
+                        break None;
                     }
                 }
             }

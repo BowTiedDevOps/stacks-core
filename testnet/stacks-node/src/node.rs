@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 use std::thread::JoinHandle;
 use std::{env, thread, time};
 
-use clarity::vm::database::BurnStateDB;
 use rand::RngCore;
 use stacks::burnchains::bitcoin::BitcoinNetworkType;
 use stacks::burnchains::db::BurnchainDB;
@@ -581,6 +580,7 @@ impl Node {
                             block_height: op.block_height as u64,
                             op_vtxindex: op.vtxindex as u32,
                             target_block_height: (op.block_height as u64) - 1,
+                            memo: op.memo.clone(),
                         });
                     }
                 }
@@ -1036,6 +1036,7 @@ impl Node {
         let txid = Txid(txid_bytes);
 
         BlockstackOperationType::LeaderBlockCommit(LeaderBlockCommitOp {
+            treatment: vec![],
             sunset_burn: 0,
             block_header_hash,
             burn_fee,

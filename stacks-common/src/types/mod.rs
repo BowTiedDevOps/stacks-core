@@ -1,6 +1,9 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+#[cfg(feature = "canonical")]
+pub mod sqlite;
+
 use crate::address::c32::{c32_address, c32_address_decode};
 use crate::address::{
     public_keys_to_address_hash, to_bits_p2pkh, AddressHashMode,
@@ -60,6 +63,16 @@ pub const PEER_VERSION_EPOCH_2_0: u8 = 0x00;
 pub const PEER_VERSION_EPOCH_2_05: u8 = 0x05;
 pub const PEER_VERSION_EPOCH_2_1: u8 = 0x06;
 
+// sliding burnchain window over which a miner's past block-commit payouts will be used to weight
+// its current block-commit in a sortition.
+// This is the value used in epoch 2.x
+pub const MINING_COMMITMENT_WINDOW: u8 = 6;
+
+// how often a miner must commit in its mining commitment window in order to even be considered for
+// sortition.
+// Only relevant for Nakamoto (epoch 3.x)
+pub const MINING_COMMITMENT_FREQUENCY_NAKAMOTO: u8 = 3;
+
 #[repr(u32)]
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord, Hash, Copy, Serialize, Deserialize)]
 pub enum StacksEpochId {
@@ -74,9 +87,29 @@ pub enum StacksEpochId {
     Epoch30 = 0x03000,
 }
 
+pub enum MempoolCollectionBehavior {
+    ByStacksHeight,
+    ByReceiveTime,
+}
+
 impl StacksEpochId {
     pub fn latest() -> StacksEpochId {
         StacksEpochId::Epoch30
+    }
+
+    /// In this epoch, how should the mempool perform garbage collection?
+    pub fn mempool_garbage_behavior(&self) -> MempoolCollectionBehavior {
+        match self {
+            StacksEpochId::Epoch10
+            | StacksEpochId::Epoch20
+            | StacksEpochId::Epoch2_05
+            | StacksEpochId::Epoch21
+            | StacksEpochId::Epoch22
+            | StacksEpochId::Epoch23
+            | StacksEpochId::Epoch24
+            | StacksEpochId::Epoch25 => MempoolCollectionBehavior::ByStacksHeight,
+            StacksEpochId::Epoch30 => MempoolCollectionBehavior::ByReceiveTime,
+        }
     }
 
     /// Returns whether or not this Epoch should perform
@@ -108,6 +141,22 @@ impl StacksEpochId {
         }
     }
 
+    /// Whether or not this epoch supports the punishment of PoX reward
+    /// recipients using the bitvec scheme
+    pub fn allows_pox_punishment(&self) -> bool {
+        match self {
+            StacksEpochId::Epoch10
+            | StacksEpochId::Epoch20
+            | StacksEpochId::Epoch2_05
+            | StacksEpochId::Epoch21
+            | StacksEpochId::Epoch22
+            | StacksEpochId::Epoch23
+            | StacksEpochId::Epoch24
+            | StacksEpochId::Epoch25 => false,
+            StacksEpochId::Epoch30 => true,
+        }
+    }
+
     /// Does this epoch support unlocking PoX contributors that miss a slot?
     ///
     /// Epoch 2.0 - 2.05 didn't support this feature, but they weren't epoch-guarded on it. Instead,
@@ -116,6 +165,63 @@ impl StacksEpochId {
     ///  true for all epochs before 2.5. For 2.5 and after, this returns false.
     pub fn supports_pox_missed_slot_unlocks(&self) -> bool {
         self < &StacksEpochId::Epoch25
+    }
+
+    /// What is the sortition mining commitment window for this epoch?
+    pub fn mining_commitment_window(&self) -> u8 {
+        MINING_COMMITMENT_WINDOW
+    }
+
+    /// How often must a miner mine in order to be considered for sortition in its commitment
+    /// window?
+    pub fn mining_commitment_frequency(&self) -> u8 {
+        match self {
+            StacksEpochId::Epoch10
+            | StacksEpochId::Epoch20
+            | StacksEpochId::Epoch2_05
+            | StacksEpochId::Epoch21
+            | StacksEpochId::Epoch22
+            | StacksEpochId::Epoch23
+            | StacksEpochId::Epoch24
+            | StacksEpochId::Epoch25 => 0,
+            StacksEpochId::Epoch30 => MINING_COMMITMENT_FREQUENCY_NAKAMOTO,
+        }
+    }
+
+    /// Returns true for epochs which use Nakamoto blocks. These blocks use a
+    /// different header format than the previous Stacks blocks, which among
+    /// other changes includes a Stacks-specific timestamp.
+    pub fn uses_nakamoto_blocks(&self) -> bool {
+        self >= &StacksEpochId::Epoch30
+    }
+
+    /// Returns whether or not this epoch uses the tip for reading burn block
+    /// info in Clarity (3.0+ behavior) or should use the parent block's burn
+    /// block (behavior before 3.0).
+    pub fn clarity_uses_tip_burn_block(&self) -> bool {
+        self >= &StacksEpochId::Epoch30
+    }
+
+    /// Does this epoch use the nakamoto reward set, or the epoch2 reward set?
+    /// We use the epoch2 reward set in all pre-3.0 epochs.
+    /// We also use the epoch2 reward set in the first 3.0 reward cycle.
+    /// After that, we use the nakamoto reward set.
+    pub fn uses_nakamoto_reward_set(
+        &self,
+        cur_reward_cycle: u64,
+        first_epoch30_reward_cycle: u64,
+    ) -> bool {
+        match self {
+            StacksEpochId::Epoch10
+            | StacksEpochId::Epoch20
+            | StacksEpochId::Epoch2_05
+            | StacksEpochId::Epoch21
+            | StacksEpochId::Epoch22
+            | StacksEpochId::Epoch23
+            | StacksEpochId::Epoch24
+            | StacksEpochId::Epoch25 => false,
+            StacksEpochId::Epoch30 => cur_reward_cycle > first_epoch30_reward_cycle,
+        }
     }
 }
 
