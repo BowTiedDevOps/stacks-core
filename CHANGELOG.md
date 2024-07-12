@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to the versioning scheme outlined in the [README.md](README.md).
 
-## Unreleased
+## [2.5.0.0.5]
+### Added
+- Added configuration option `connections.antientropy_retry` (#4932)
+### Changed
+- Set default antientropy_retry to run once per hour (#4935)
+
+
+## [2.5.0.0.4]
 
 ### Added
 
@@ -22,6 +29,17 @@ and this project adheres to the versioning scheme outlined in the [README.md](RE
 ### Changed
 
 - Downgraded log messages about transactions from warning to info (#4697)
+- Fix race condition between the signer binary and the /v2/pox endpoint (#4738)
+- Make node config mock_miner item hot-swappable (#4743)
+- Mandates that a burnchain block header be resolved by a BurnchainHeaderReader, which will resolve a block height to at most one burnchain header (#4748)
+- Optional config option to resolve DNS of bootstrap nodes (#4749)
+- Limit inventory syncs with new peers (#4750)
+- Update /v2/fees/transfer to report the median transaction fee estimate for a STX-transfer of 180 bytes (#4754)
+- Reduce connection spamming in stackerdb (#4759)
+- Remove deprecated signer cli commands (#4772)
+- Extra pair of signer slots got introduced at the epoch 2.5 boundary (#4845, #4868, #4891)
+- Never consider Stacks chain tips that are not on the canonical burn chain #4886 (#4893)
+
 
 ### Fixed
 

@@ -837,7 +837,7 @@ impl StacksClient {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use std::io::{BufWriter, Write};
     use std::thread::spawn;
 
@@ -1195,7 +1195,7 @@ mod tests {
             (ClarityName::from("signer"), TypeSignature::PrincipalType),
         ]
         .into_iter()
-        .collect::<HashMap<_, _>>()
+        .collect::<BTreeMap<_, _>>()
         .try_into()
         .unwrap();
 
