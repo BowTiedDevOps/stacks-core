@@ -14,10 +14,6 @@ on:
       - "**.md"
       - "**.yml"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "The tag to create (optional)"
-        required: false
   pull_request:
     types:
       - opened
@@ -34,7 +30,7 @@ concurrency:
   ## Always cancel duplicate jobs
   cancel-in-progress: true
 
-run-name: ${{ inputs.tag }}
+run-name: ${{ github.ref_name }}
 
 jobs:
   ##
@@ -50,24 +46,55 @@ jobs:
     steps:
       - name: Rustfmt
         id: rustfmt
-        uses: stacks-network/actions/rustfmt@main
+        uses: BowTiedDevOps/actions/rustfmt@main
         with:
           alias: "fmt-stacks"
+
+  ######################################################################################
+  ## Check if the head branch of the PR is a release branch
+  ##
+  ## Runs when the following is true:
+  ##  - The workflow was triggered by a `workflow_dispatch` action
+  check-release:
+    if: |
+      (
+        github.event_name == 'workflow_dispatch'
+      )
+    name: Check Release
+    needs:
+      - rustfmt
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check_release.outputs.tag }}
+      docker_tag: ${{ steps.check_release.outputs.docker_tag }}
+    steps:
+      - name: Check Release
+        id: check_release
+        uses: BowTiedDevOps/actions/stacks-core/check-release@main
+        with:
+          tag: ${{ github.ref_name }}
 
   ######################################################################################
   ## Create a tagged github release
   ##
   ## Runs when the following is true:
-  ##  - tag is provided
+  ##  - the check-release job outputs a non-empty string for:
+  ##    - the tag
+  ##    - the docker tag
   create-release:
     if: |
-      inputs.tag != ''
+      (
+        needs.check-release.outputs.tag != '' &&
+        needs.check-release.outputs.docker_tag != ''
+      )
     name: Create Release
     needs:
       - rustfmt
+      - check-release
     uses: ./.github/workflows/github-release.yml
     with:
-      tag: ${{ inputs.tag }}
+      tag: ${{ needs.check-release.outputs.tag }}
+      docker_tag: ${{ needs.check-release.outputs.docker_tag }}
     secrets: inherit
 
   ## Build and push Debian image built from source
@@ -176,21 +203,29 @@ jobs:
   ##
   ## Runs when:
   ##   - tag is provided
-  atlas-tests:
-    if: inputs.tag != ''
-    name: Atlas Tests
-    needs:
-      - rustfmt
-      - create-cache
-    uses: ./.github/workflows/atlas-tests.yml
+  # atlas-tests:
+  #   if: inputs.tag != ''
+  #   name: Atlas Tests
+  #   needs:
+  #     - rustfmt
+  #     - create-cache
+  #   uses: ./.github/workflows/atlas-tests.yml
 
-  epoch-tests:
-    if: inputs.tag != ''
-    name: Epoch Tests
-    needs:
-      - rustfmt
-      - create-cache
-    uses: ./.github/workflows/epoch-tests.yml
+  # epoch-tests:
+  #   if: inputs.tag != ''
+  #   name: Epoch Tests
+  #   needs:
+  #     - rustfmt
+  #     - create-cache
+  #   uses: ./.github/workflows/epoch-tests.yml
+
+  # slow-tests:
+  #   if: inputs.tag != ''
+  #   name: Slow Tests
+  #   needs:
+  #     - rustfmt
+  #     - create-cache
+  #   uses: ./.github/workflows/slow-tests.yml
 
   slow-tests:
     if: inputs.tag != ''
@@ -199,4 +234,3 @@ jobs:
       - rustfmt
       - create-cache
     uses: ./.github/workflows/slow-tests.yml
-

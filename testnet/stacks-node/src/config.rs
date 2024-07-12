@@ -513,7 +513,7 @@ lazy_static! {
         heartbeat: 3600,
         // can't use u64::max, because sqlite stores as i64.
         private_key_lifetime: 9223372036854775807,
-        num_neighbors: 16,              // number of neighbors whose inventories we track
+        num_neighbors: 32,              // number of neighbors whose inventories we track
         num_clients: 750,               // number of inbound p2p connections
         soft_num_neighbors: 16,         // soft-limit on the number of neighbors whose inventories we track
         soft_num_clients: 750,          // soft limit on the number of inbound p2p connections
@@ -827,6 +827,8 @@ impl Config {
         }
     }
 
+    // TODO: add tests from mutation testing results #4866
+    #[cfg_attr(test, mutants::skip)]
     fn make_epochs(
         conf_epochs: &[StacksEpochConfigFile],
         burn_mode: &str,
@@ -1274,6 +1276,8 @@ impl Config {
         }
     }
 
+    // TODO: add tests from mutation testing results #4867
+    #[cfg_attr(test, mutants::skip)]
     pub fn make_block_builder_settings(
         &self,
         attempt: u64,
@@ -2320,7 +2324,7 @@ impl Default for MinerConfig {
             first_attempt_time_ms: 10,
             subsequent_attempt_time_ms: 120_000,
             microblock_attempt_time_ms: 30_000,
-            nakamoto_attempt_time_ms: 10_000,
+            nakamoto_attempt_time_ms: 20_000,
             probability_pick_no_estimate_tx: 25,
             block_reward_recipient: None,
             segwit: false,

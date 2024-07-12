@@ -26,6 +26,7 @@ extern crate stacks_common;
 #[macro_use(o, slog_log, slog_trace, slog_debug, slog_info, slog_warn, slog_error)]
 extern crate slog;
 
+use stacks_common::types::MempoolCollectionBehavior;
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "arm")))]
 use tikv_jemallocator::Jemalloc;
 
@@ -37,6 +38,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
 use std::io::BufReader;
+use std::time::Instant;
 use std::{env, fs, io, process, thread};
 
 use blockstack_lib::burnchains::bitcoin::indexer::{
@@ -65,7 +67,6 @@ use blockstack_lib::chainstate::stacks::{StacksBlockHeader, *};
 use blockstack_lib::clarity::vm::costs::ExecutionCost;
 use blockstack_lib::clarity::vm::types::StacksAddressExtensions;
 use blockstack_lib::clarity::vm::ClarityVersion;
-use blockstack_lib::clarity_cli;
 use blockstack_lib::clarity_cli::vm_execute;
 use blockstack_lib::core::{MemPoolDB, *};
 use blockstack_lib::cost_estimates::metrics::UnitMetric;
@@ -76,6 +77,7 @@ use blockstack_lib::net::relay::Relayer;
 use blockstack_lib::net::StacksMessage;
 use blockstack_lib::util_lib::db::sqlite_open;
 use blockstack_lib::util_lib::strings::UrlString;
+use blockstack_lib::{clarity_cli, util_lib};
 use libstackerdb::StackerDBChunkData;
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, OpenFlags};
@@ -91,6 +93,7 @@ use stacks_common::util::secp256k1::{Secp256k1PrivateKey, Secp256k1PublicKey};
 use stacks_common::util::vrf::VRFProof;
 use stacks_common::util::{get_epoch_time_ms, log, sleep_ms};
 
+#[cfg_attr(test, mutants::skip)]
 fn main() {
     let mut argv: Vec<String> = env::args().collect();
     if argv.len() < 2 {
@@ -641,7 +644,7 @@ simulating a miner.
 
         let result = StacksBlockBuilder::build_anchored_block(
             &chain_state,
-            &sort_db.index_conn(),
+            &sort_db.index_handle(&chain_tip.sortition_id),
             &mut mempool_db,
             &parent_header,
             chain_tip.total_burn,
@@ -878,6 +881,7 @@ simulating a miner.
             eprintln!("Usage:");
             eprintln!("  {n} <chainstate_path>");
             eprintln!("  {n} <chainstate_path> prefix <index-block-hash-prefix>");
+            eprintln!("  {n} <chainstate_path> index-range <start_block> <end_block>");
             eprintln!("  {n} <chainstate_path> range <start_block> <end_block>");
             eprintln!("  {n} <chainstate_path> <first|last> <block_count>");
             process::exit(1);
@@ -885,6 +889,7 @@ simulating a miner.
         if argv.len() < 2 {
             print_help_and_exit();
         }
+        let start = Instant::now();
         let stacks_path = &argv[2];
         let mode = argv.get(3).map(String::as_str);
         let staging_blocks_db_path = format!("{stacks_path}/mainnet/chainstate/vm/index.sqlite");
@@ -894,11 +899,11 @@ simulating a miner.
 
         let query = match mode {
             Some("prefix") => format!(
-                "SELECT index_block_hash FROM staging_blocks WHERE index_block_hash LIKE \"{}%\"",
+                "SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0 AND index_block_hash LIKE \"{}%\"",
                 argv[4]
             ),
             Some("first") => format!(
-                "SELECT index_block_hash FROM staging_blocks ORDER BY height ASC LIMIT {}",
+                "SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0 ORDER BY height ASC LIMIT {}",
                 argv[4]
             ),
             Some("range") => {
@@ -908,15 +913,23 @@ simulating a miner.
                 let arg5 = argv[5].parse::<u64>().expect("<end_block> not a valid u64");
                 let start = arg4.saturating_sub(1);
                 let blocks = arg5.saturating_sub(arg4);
-                format!("SELECT index_block_hash FROM staging_blocks ORDER BY height ASC LIMIT {start}, {blocks}")
+                format!("SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0 ORDER BY height ASC LIMIT {start}, {blocks}")
+            }
+            Some("index-range") => {
+                let start = argv[4]
+                    .parse::<u64>()
+                    .expect("<start_block> not a valid u64");
+                let end = argv[5].parse::<u64>().expect("<end_block> not a valid u64");
+                let blocks = end.saturating_sub(start);
+                format!("SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0 ORDER BY index_block_hash ASC LIMIT {start}, {blocks}")
             }
             Some("last") => format!(
-                "SELECT index_block_hash FROM staging_blocks ORDER BY height DESC LIMIT {}",
+                "SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0 ORDER BY height DESC LIMIT {}",
                 argv[4]
             ),
             Some(_) => print_help_and_exit(),
             // Default to ALL blocks
-            None => "SELECT index_block_hash FROM staging_blocks".into(),
+            None => "SELECT index_block_hash FROM staging_blocks WHERE orphaned = 0".into(),
         };
 
         let mut stmt = conn.prepare(&query).unwrap();
@@ -935,7 +948,7 @@ simulating a miner.
             }
             replay_block(stacks_path, index_block_hash);
         }
-        println!("Finished!");
+        println!("Finished. run_time_seconds = {}", start.elapsed().as_secs());
         process::exit(0);
     }
 
@@ -1179,7 +1192,7 @@ simulating a miner.
                 // simulate the p2p refreshing itself
                 // update p2p's read-only view of the unconfirmed state
                 p2p_chainstate
-                    .refresh_unconfirmed_state(&p2p_new_sortition_db.index_conn())
+                    .refresh_unconfirmed_state(&p2p_new_sortition_db.index_handle_at_tip())
                     .expect("Failed to open unconfirmed Clarity state");
 
                 sleep_ms(100);
@@ -1332,6 +1345,7 @@ simulating a miner.
     }
 }
 
+#[cfg_attr(test, mutants::skip)]
 fn tip_mine() {
     let argv: Vec<String> = env::args().collect();
     if argv.len() < 6 {
@@ -1371,13 +1385,11 @@ simulating a miner.
     let mut mempool_db = MemPoolDB::open(true, chain_id, &chain_state_path, estimator, metric)
         .expect("Failed to open mempool db");
 
-    {
-        info!("Clearing mempool");
-        let mut tx = mempool_db.tx_begin().unwrap();
-        let min_height = u32::MAX as u64;
-        MemPoolDB::garbage_collect(&mut tx, min_height, None).unwrap();
-        tx.commit().unwrap();
-    }
+    info!("Clearing mempool");
+    let min_height = u32::MAX as u64;
+    mempool_db
+        .garbage_collect(min_height, &MempoolCollectionBehavior::ByStacksHeight, None)
+        .unwrap();
 
     let header_tip = NakamotoChainState::get_canonical_block_header(chain_state.db(), &sort_db)
         .unwrap()
@@ -1522,7 +1534,7 @@ simulating a miner.
 
     let result = StacksBlockBuilder::build_anchored_block(
         &chain_state,
-        &sort_db.index_conn(),
+        &sort_db.index_handle_at_tip(),
         &mut mempool_db,
         &parent_header,
         chain_tip.total_burn,

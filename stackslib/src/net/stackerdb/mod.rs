@@ -154,6 +154,7 @@ pub const STACKERDB_CONFIG_FUNCTION: &str = "stackerdb-get-config";
 pub const MINER_SLOT_COUNT: u32 = 1;
 
 /// Final result of synchronizing state with a remote set of DB replicas
+#[derive(Clone)]
 pub struct StackerDBSyncResult {
     /// which contract this is a replica for
     pub contract_id: QualifiedContractIdentifier,
@@ -267,6 +268,7 @@ impl StackerDBs {
         chainstate: &mut StacksChainState,
         sortdb: &SortitionDB,
         stacker_db_configs: HashMap<QualifiedContractIdentifier, StackerDBConfig>,
+        num_neighbors: u64,
     ) -> Result<HashMap<QualifiedContractIdentifier, StackerDBConfig>, net_error> {
         let existing_contract_ids = self.get_stackerdb_contract_ids()?;
         let mut new_stackerdb_configs = HashMap::new();
@@ -288,15 +290,20 @@ impl StackerDBs {
                 })
             } else {
                 // attempt to load the config from the contract itself
-                StackerDBConfig::from_smart_contract(chainstate, &sortdb, &stackerdb_contract_id)
-                    .unwrap_or_else(|e| {
-                        warn!(
-                            "Failed to load StackerDB config";
-                            "contract" => %stackerdb_contract_id,
-                            "err" => ?e,
-                        );
-                        StackerDBConfig::noop()
-                    })
+                StackerDBConfig::from_smart_contract(
+                    chainstate,
+                    &sortdb,
+                    &stackerdb_contract_id,
+                    num_neighbors,
+                )
+                .unwrap_or_else(|e| {
+                    warn!(
+                        "Failed to load StackerDB config";
+                        "contract" => %stackerdb_contract_id,
+                        "err" => ?e,
+                    );
+                    StackerDBConfig::noop()
+                })
             };
             // Create the StackerDB replica if it does not exist already
             if !existing_contract_ids.contains(&stackerdb_contract_id) {

@@ -9,6 +9,10 @@ on:
         description: "Release Tag"
         required: true
         type: string
+      docker_tag:
+        description: "Docker Release Tag"
+        required: true
+        type: string
     secrets:
       GH_TOKEN:
         required: true
@@ -21,6 +25,16 @@ concurrency:
 run-name: ${{ inputs.tag }}
 
 jobs:
+  test-print:
+    name: Test Job
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test Print
+        run: |
+          echo "Yes fam it reached here gg"
+          echo "Tag: ${{ inputs.tag }}"
+          echo "Docker Tag: ${{ inputs.docker_tag }}"
+
   ## Build arch dependent binaries from source
   ##
   ## Runs when the following is true:
@@ -57,7 +71,7 @@ jobs:
       ## Generate a checksums file to be added to the release page
       - name: Generate Checksums
         id: generate_checksum
-        uses: stacks-network/actions/generate-checksum@main
+        uses: BowTiedDevOps/actions/generate-checksum@main
         with:
           artifact_download_pattern: "${{ inputs.tag }}-binary-build-*"
 
@@ -68,8 +82,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         with:
-          name: Release ${{ github.event.inputs.tag || github.ref }}
-          tag_name: ${{ github.event.inputs.tag || github.ref }}
+          name: Release ${{ inputs.tag || github.ref }}
+          tag_name: ${{ inputs.tag || github.ref }}
           draft: false
           prerelease: true
           fail_on_unmatched_files: true
@@ -94,4 +108,5 @@ jobs:
       - create-release
     with:
       tag: ${{ inputs.tag }}
+      docker_tag: ${{ inputs.docker_tag }}
     secrets: inherit

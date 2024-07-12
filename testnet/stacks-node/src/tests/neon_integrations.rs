@@ -877,7 +877,7 @@ pub fn call_read_only(
     principal: &StacksAddress,
     contract: &str,
     function: &str,
-    args: Vec<&str>,
+    args: Vec<&Value>,
 ) -> Value {
     let http_origin = format!("http://{}", &conf.node.rpc_bind);
     let client = reqwest::blocking::Client::new();
@@ -886,8 +886,14 @@ pub fn call_read_only(
         "{http_origin}/v2/contracts/call-read/{}/{}/{}",
         principal, contract, function
     );
+
+    let serialized_args = args
+        .iter()
+        .map(|arg| arg.serialize_to_hex().unwrap())
+        .collect::<Vec<String>>();
+
     let body = json!({
-        "arguments": args,
+        "arguments": serialized_args,
         "sender": principal.to_string(),
     });
     let response: ReadOnlyResponse = client
@@ -3463,12 +3469,22 @@ fn microblock_fork_poison_integration_test() {
         .unwrap();
 
         chainstate
-            .reload_unconfirmed_state(&btc_regtest_controller.sortdb_ref().index_conn(), tip_hash)
+            .reload_unconfirmed_state(
+                &btc_regtest_controller
+                    .sortdb_ref()
+                    .index_handle_at_block(&chainstate, &tip_hash)
+                    .unwrap(),
+                tip_hash,
+            )
+            .unwrap();
+        let iconn = btc_regtest_controller
+            .sortdb_ref()
+            .index_handle_at_block(&chainstate, &tip_hash)
             .unwrap();
         let first_microblock = make_microblock(
             &privk,
             &mut chainstate,
-            &btc_regtest_controller.sortdb_ref().index_conn(),
+            &iconn,
             consensus_hash,
             stacks_block.clone(),
             vec![unconfirmed_tx],
@@ -3718,12 +3734,22 @@ fn microblock_integration_test() {
         .unwrap();
 
         chainstate
-            .reload_unconfirmed_state(&btc_regtest_controller.sortdb_ref().index_conn(), tip_hash)
+            .reload_unconfirmed_state(
+                &btc_regtest_controller
+                    .sortdb_ref()
+                    .index_handle_at_block(&chainstate, &tip_hash)
+                    .unwrap(),
+                tip_hash,
+            )
+            .unwrap();
+        let iconn = btc_regtest_controller
+            .sortdb_ref()
+            .index_handle_at_block(&chainstate, &tip_hash)
             .unwrap();
         let first_microblock = make_microblock(
             &privk,
             &mut chainstate,
-            &btc_regtest_controller.sortdb_ref().index_conn(),
+            &iconn,
             consensus_hash,
             stacks_block.clone(),
             vec![unconfirmed_tx],
@@ -9134,7 +9160,13 @@ fn use_latest_tip_integration_test() {
 
     // Initialize the unconfirmed state.
     chainstate
-        .reload_unconfirmed_state(&btc_regtest_controller.sortdb_ref().index_conn(), tip_hash)
+        .reload_unconfirmed_state(
+            &btc_regtest_controller
+                .sortdb_ref()
+                .index_handle_at_block(&chainstate, &tip_hash)
+                .unwrap(),
+            tip_hash,
+        )
         .unwrap();
 
     // Make microblock with two transactions.
@@ -9154,10 +9186,14 @@ fn use_latest_tip_integration_test() {
     let vec_tx = vec![tx_1, tx_2];
     let privk =
         find_microblock_privkey(&conf, &stacks_block.header.microblock_pubkey_hash, 1024).unwrap();
+    let iconn = btc_regtest_controller
+        .sortdb_ref()
+        .index_handle_at_block(&chainstate, &tip_hash)
+        .unwrap();
     let mblock = make_microblock(
         &privk,
         &mut chainstate,
-        &btc_regtest_controller.sortdb_ref().index_conn(),
+        &iconn,
         consensus_hash,
         stacks_block.clone(),
         vec_tx,
