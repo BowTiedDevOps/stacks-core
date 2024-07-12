@@ -946,6 +946,8 @@ impl<'a> BurnchainDBTransaction<'a> {
         BurnchainDB::inner_get_canonical_chain_tip(&self.sql_tx)
     }
 
+    // TODO: add tests from mutation testing results #4837
+    #[cfg_attr(test, mutants::skip)]
     /// You'd only do this in network emergencies, where node operators are expected to declare an
     /// anchor block missing (or present).  Ideally there'd be a smart contract somewhere for this.
     pub fn set_override_affirmation_map(
@@ -1123,12 +1125,16 @@ impl BurnchainDB {
         Ok(res.is_some())
     }
 
-    pub fn get_burnchain_header(
+    pub fn get_burnchain_header<B: BurnchainHeaderReader>(
         conn: &DBConn,
+        indexer: &B,
         height: u64,
     ) -> Result<Option<BurnchainBlockHeader>, BurnchainError> {
-        let qry = "SELECT * FROM burnchain_db_block_headers WHERE block_height = ?1";
-        let args = &[&u64_to_sql(height)?];
+        let Some(hdr) = indexer.read_burnchain_header(height)? else {
+            return Ok(None);
+        };
+        let qry = "SELECT * FROM burnchain_db_block_headers WHERE block_hash = ?1";
+        let args = &[&hdr.block_hash];
         let res: Option<BurnchainBlockHeader> = query_row(conn, qry, args)?;
         Ok(res)
     }

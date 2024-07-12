@@ -37,9 +37,11 @@ use self::bitcoin::{
     Error as btc_error,
 };
 use crate::chainstate::burn::distribution::BurnSamplePoint;
-use crate::chainstate::burn::operations::leader_block_commit::OUTPUTS_PER_COMMIT;
+use crate::chainstate::burn::operations::leader_block_commit::{
+    MissedBlockCommit, OUTPUTS_PER_COMMIT,
+};
 use crate::chainstate::burn::operations::{
-    BlockstackOperationType, Error as op_error, LeaderKeyRegisterOp,
+    BlockstackOperationType, Error as op_error, LeaderBlockCommitOp, LeaderKeyRegisterOp,
 };
 use crate::chainstate::stacks::address::PoxAddress;
 use crate::chainstate::stacks::boot::{POX_1_NAME, POX_2_NAME, POX_3_NAME, POX_4_NAME};
@@ -466,6 +468,8 @@ impl PoxConstants {
         ) // total liquid supply is 40000000000000000 µSTX
     }
 
+    // TODO: add tests from mutation testing results #4838
+    #[cfg_attr(test, mutants::skip)]
     pub fn regtest_default() -> PoxConstants {
         PoxConstants::new(
             5,
@@ -646,6 +650,8 @@ pub struct BurnchainStateTransition {
     pub burn_dist: Vec<BurnSamplePoint>,
     pub accepted_ops: Vec<BlockstackOperationType>,
     pub consumed_leader_keys: Vec<LeaderKeyRegisterOp>,
+    pub windowed_block_commits: Vec<Vec<LeaderBlockCommitOp>>,
+    pub windowed_missed_commits: Vec<Vec<MissedBlockCommit>>,
 }
 
 /// The burnchain block's state transition's ops:
@@ -689,6 +695,8 @@ pub enum Error {
     CoordinatorClosed,
     /// Graceful shutdown error
     ShutdownInitiated,
+    /// No epoch defined at that height
+    NoStacksEpoch,
 }
 
 impl fmt::Display for Error {
@@ -714,6 +722,10 @@ impl fmt::Display for Error {
             ),
             Error::CoordinatorClosed => write!(f, "ChainsCoordinator channel hung up"),
             Error::ShutdownInitiated => write!(f, "Graceful shutdown was initiated"),
+            Error::NoStacksEpoch => write!(
+                f,
+                "No Stacks epoch is defined at the height being evaluated"
+            ),
         }
     }
 }
@@ -737,6 +749,7 @@ impl error::Error for Error {
             Error::NonCanonicalPoxId(_, _) => None,
             Error::CoordinatorClosed => None,
             Error::ShutdownInitiated => None,
+            Error::NoStacksEpoch => None,
         }
     }
 }

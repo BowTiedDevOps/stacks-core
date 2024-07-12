@@ -15,6 +15,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 use std::{cmp, io};
 
 use clarity::vm::costs::ExecutionCost;
@@ -31,6 +32,7 @@ use stacks_common::types::chainstate::{
     BlockHeaderHash, BurnchainHeaderHash, StacksAddress, StacksBlockId, StacksWorkScore, TrieHash,
     VRFSeed,
 };
+use stacks_common::types::{MempoolCollectionBehavior, StacksEpochId};
 use stacks_common::util::hash::{hex_bytes, to_hex, Hash160, *};
 use stacks_common::util::secp256k1::{MessageSignature, *};
 use stacks_common::util::vrf::VRFProof;
@@ -127,6 +129,7 @@ pub fn make_block(
         burn_header_height: burn_height as u32,
         burn_header_timestamp: 0,
         anchored_block_size: 1,
+        burn_view: None,
     };
 
     c_tx.commit_block();
@@ -192,6 +195,7 @@ fn mempool_walk_over_fork() {
         0x80000000,
         &TransactionAnchorMode::Any,
         &TransactionPostConditionMode::Allow,
+        StacksEpochId::latest(),
     );
 
     let blocks_to_broadcast_in = [&b_1, &b_2, &b_4];
@@ -601,6 +605,7 @@ fn test_iterate_candidates_consider_no_estimate_tx_prob() {
         0x80000000,
         &TransactionAnchorMode::Any,
         &TransactionPostConditionMode::Allow,
+        StacksEpochId::latest(),
     );
 
     // Load 24 transactions into the mempool, alternating whether or not they have a fee-rate.
@@ -796,6 +801,7 @@ fn test_iterate_candidates_skipped_transaction() {
         0x80000000,
         &TransactionAnchorMode::Any,
         &TransactionPostConditionMode::Allow,
+        StacksEpochId::latest(),
     );
 
     // Load 3 transactions into the mempool
@@ -908,6 +914,7 @@ fn test_iterate_candidates_processing_error_transaction() {
         0x80000000,
         &TransactionAnchorMode::Any,
         &TransactionPostConditionMode::Allow,
+        StacksEpochId::latest(),
     );
 
     // Load 3 transactions into the mempool
@@ -1022,6 +1029,7 @@ fn test_iterate_candidates_problematic_transaction() {
         0x80000000,
         &TransactionAnchorMode::Any,
         &TransactionPostConditionMode::Allow,
+        StacksEpochId::latest(),
     );
 
     // Load 3 transactions into the mempool
@@ -1136,6 +1144,7 @@ fn test_iterate_candidates_concurrent_write_lock() {
         0x80000000,
         &TransactionAnchorMode::Any,
         &TransactionPostConditionMode::Allow,
+        StacksEpochId::latest(),
     );
 
     let mut expected_addr_nonces = HashMap::new();
@@ -1294,6 +1303,7 @@ fn mempool_do_not_replace_tx() {
         0x80000000,
         &TransactionAnchorMode::Any,
         &TransactionPostConditionMode::Allow,
+        StacksEpochId::latest(),
     );
     let mut tx = txs.pop().unwrap();
 
@@ -1379,8 +1389,10 @@ fn mempool_do_not_replace_tx() {
     assert!(!MemPoolDB::db_has_tx(&mempool_tx, &txid).unwrap());
 }
 
-#[test]
-fn mempool_db_load_store_replace_tx() {
+#[rstest]
+#[case(MempoolCollectionBehavior::ByStacksHeight)]
+#[case(MempoolCollectionBehavior::ByReceiveTime)]
+fn mempool_db_load_store_replace_tx(#[case] behavior: MempoolCollectionBehavior) {
     let mut chainstate = instantiate_chainstate(false, 0x80000000, function_name!());
     let chainstate_path = chainstate_path(function_name!());
     let mut mempool = MemPoolDB::open_test(false, 0x80000000, &chainstate_path).unwrap();
@@ -1390,6 +1402,7 @@ fn mempool_db_load_store_replace_tx() {
         0x80000000,
         &TransactionAnchorMode::Any,
         &TransactionPostConditionMode::Allow,
+        StacksEpochId::latest(),
     );
     let num_txs = txs.len() as u64;
 
@@ -1606,7 +1619,17 @@ fn mempool_db_load_store_replace_tx() {
 
     eprintln!("garbage-collect");
     let mut mempool_tx = mempool.tx_begin().unwrap();
-    MemPoolDB::garbage_collect(&mut mempool_tx, 101, None).unwrap();
+    match behavior {
+        MempoolCollectionBehavior::ByStacksHeight => {
+            MemPoolDB::garbage_collect_by_height(&mut mempool_tx, 101, None)
+        }
+        MempoolCollectionBehavior::ByReceiveTime => {
+            let test_max_age = Duration::from_secs(1);
+            std::thread::sleep(2 * test_max_age);
+            MemPoolDB::garbage_collect_by_time(&mut mempool_tx, &test_max_age, None)
+        }
+    }
+    .unwrap();
     mempool_tx.commit().unwrap();
 
     let txs = MemPoolDB::get_txs_after(

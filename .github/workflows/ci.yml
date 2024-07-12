@@ -101,14 +101,14 @@ jobs:
   ##
   ## Runs when:
   ##   - tag is not provided
-  # docker-image:
-  #   if: |
-  #     inputs.tag == ''
-  #   name: Docker Image (Source)
-  #   uses: ./.github/workflows/image-build-source.yml
-  #   needs:
-  #     - rustfmt
-  #   secrets: inherit
+  docker-image:
+    if: |
+      inputs.tag == ''
+    name: Docker Image (Source)
+    uses: ./.github/workflows/image-build-source.yml
+    needs:
+      - rustfmt
+    secrets: inherit
 
   ## Create a reusable cache for tests
   ##
@@ -120,27 +120,27 @@ jobs:
   ##         - this workflow is called manually
   ##         - PR is opened
   ##         - commit to either (development, master) branch
-  # create-cache:
-  #   if: |
-  #     inputs.tag != '' || (
-  #       inputs.tag == '' && (
-  #         github.event_name == 'workflow_dispatch' ||
-  #         github.event_name == 'pull_request' ||
-  #         github.event_name == 'merge_group' ||
-  #         (
-  #           contains('
-  #             refs/heads/master
-  #             refs/heads/develop
-  #             refs/heads/next
-  #           ', github.event.pull_request.head.ref) &&
-  #           github.event_name == 'push'
-  #         )
-  #       )
-  #     )
-  #   name: Create Test Cache
-  #   needs:
-  #     - rustfmt
-  #   uses: ./.github/workflows/create-cache.yml
+  create-cache:
+    if: |
+      inputs.tag != '' || (
+        inputs.tag == '' && (
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'pull_request' ||
+          github.event_name == 'merge_group' ||
+          (
+            contains('
+              refs/heads/master
+              refs/heads/develop
+              refs/heads/next
+            ', github.event.pull_request.head.ref) &&
+            github.event_name == 'push'
+          )
+        )
+      )
+    name: Create Test Cache
+    needs:
+      - rustfmt
+    uses: ./.github/workflows/create-cache.yml
 
   ## Tests to run regularly
   ##
@@ -153,51 +153,51 @@ jobs:
   ##         - PR is opened
   ##         - PR added to merge queue
   ##         - commit to either (development, next, master) branch
-  # stacks-core-tests:
-  #   if: |
-  #     inputs.tag != '' || (
-  #       inputs.tag == '' && (
-  #         github.event_name == 'workflow_dispatch' ||
-  #         github.event_name == 'pull_request' ||
-  #         github.event_name == 'merge_group' ||
-  #         (
-  #           contains('
-  #             refs/heads/master
-  #             refs/heads/develop
-  #             refs/heads/next
-  #           ', github.event.pull_request.head.ref) &&
-  #           github.event_name == 'push'
-  #         )
-  #       )
-  #     )
-  #   name: Stacks Core Tests
-  #   needs:
-  #     - rustfmt
-  #     - create-cache
-  #   uses: ./.github/workflows/stacks-core-tests.yml
+  stacks-core-tests:
+    if: |
+      inputs.tag != '' || (
+        inputs.tag == '' && (
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'pull_request' ||
+          github.event_name == 'merge_group' ||
+          (
+            contains('
+              refs/heads/master
+              refs/heads/develop
+              refs/heads/next
+            ', github.event.pull_request.head.ref) &&
+            github.event_name == 'push'
+          )
+        )
+      )
+    name: Stacks Core Tests
+    needs:
+      - rustfmt
+      - create-cache
+    uses: ./.github/workflows/stacks-core-tests.yml
 
-  # bitcoin-tests:
-  #   if: |
-  #     inputs.tag != '' || (
-  #       inputs.tag == '' && (
-  #         github.event_name == 'workflow_dispatch' ||
-  #         github.event_name == 'pull_request' ||
-  #         github.event_name == 'merge_group' ||
-  #         (
-  #           contains('
-  #             refs/heads/master
-  #             refs/heads/develop
-  #             refs/heads/next
-  #           ', github.event.pull_request.head.ref) &&
-  #           github.event_name == 'push'
-  #         )
-  #       )
-  #     )
-  #   name: Bitcoin Tests
-  #   needs:
-  #     - rustfmt
-  #     - create-cache
-  #   uses: ./.github/workflows/bitcoin-tests.yml
+  bitcoin-tests:
+    if: |
+      inputs.tag != '' || (
+        inputs.tag == '' && (
+          github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'pull_request' ||
+          github.event_name == 'merge_group' ||
+          (
+            contains('
+              refs/heads/master
+              refs/heads/develop
+              refs/heads/next
+            ', github.event.pull_request.head.ref) &&
+            github.event_name == 'push'
+          )
+        )
+      )
+    name: Bitcoin Tests
+    needs:
+      - rustfmt
+      - create-cache
+    uses: ./.github/workflows/bitcoin-tests.yml
 
   ## Test to run on a tagged release
   ##
@@ -227,3 +227,10 @@ jobs:
   #     - create-cache
   #   uses: ./.github/workflows/slow-tests.yml
 
+  slow-tests:
+    if: inputs.tag != ''
+    name: Slow Tests
+    needs:
+      - rustfmt
+      - create-cache
+    uses: ./.github/workflows/slow-tests.yml

@@ -74,7 +74,7 @@ pub struct Environment<'a, 'b, 'hooks> {
 }
 
 pub struct OwnedEnvironment<'a, 'hooks> {
-    context: GlobalContext<'a, 'hooks>,
+    pub(crate) context: GlobalContext<'a, 'hooks>,
     call_stack: CallStack,
 }
 
@@ -198,7 +198,7 @@ pub struct GlobalContext<'a, 'hooks> {
     read_only: Vec<bool>,
     pub cost_track: LimitedCostTracker,
     pub mainnet: bool,
-    /// This is the epoch of the the block that this transaction is executing within.
+    /// This is the epoch of the block that this transaction is executing within.
     pub epoch_id: StacksEpochId,
     /// This is the chain ID of the transaction
     pub chain_id: u32,
@@ -973,7 +973,11 @@ impl<'a, 'b, 'hooks> Environment<'a, 'b, 'hooks> {
         let contract = self
             .global_context
             .database
-            .get_contract(contract_identifier)?;
+            .get_contract(contract_identifier)
+            .or_else(|e| {
+                self.global_context.roll_back()?;
+                Err(e)
+            })?;
 
         let result = {
             let mut nested_env = Environment::new(
@@ -1049,7 +1053,7 @@ impl<'a, 'b, 'hooks> Environment<'a, 'b, 'hooks> {
         result
     }
 
-    /// This is the epoch of the the block that this transaction is executing within.
+    /// This is the epoch of the block that this transaction is executing within.
     /// Note: in the current plans for 2.1, there is also a contract-specific **Clarity version**
     ///  which governs which native functions are available / defined. That is separate from this
     ///  epoch identifier, and most Clarity VM changes should consult that value instead. This

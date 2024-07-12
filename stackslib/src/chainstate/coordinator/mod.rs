@@ -120,7 +120,7 @@ impl NewBurnchainBlockStatus {
     }
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct RewardCycleInfo {
     pub reward_cycle: u64,
     pub anchor_status: PoxAnchorBlockStatus,
@@ -752,6 +752,7 @@ pub fn get_reward_cycle_info<U: RewardSetProvider>(
 ) -> Result<Option<RewardCycleInfo>, Error> {
     let epoch_at_height = SortitionDB::get_stacks_epoch(sort_db.conn(), burn_height)?
         .unwrap_or_else(|| panic!("FATAL: no epoch defined for burn height {}", burn_height));
+
     if !burnchain.is_reward_cycle_start(burn_height) {
         return Ok(None);
     }
@@ -830,7 +831,8 @@ pub fn get_reward_cycle_info<U: RewardSetProvider>(
     };
 
     // cache the reward cycle info as of the first sortition in the prepare phase, so that
-    // the Nakamoto epoch can go find it later
+    // the first Nakamoto epoch can go find it later.  Subsequent Nakamoto epochs will use the
+    // reward set stored to the Nakamoto chain state.
     let ic = sort_db.index_handle(sortition_tip);
     let prev_reward_cycle = burnchain
         .block_height_to_reward_cycle(burn_height)
@@ -845,9 +847,29 @@ pub fn get_reward_cycle_info<U: RewardSetProvider>(
                 .expect("FATAL: no start-of-prepare-phase sortition");
 
         let mut tx = sort_db.tx_begin()?;
-        if SortitionDB::get_preprocessed_reward_set(&mut tx, &first_prepare_sn.sortition_id)?
-            .is_none()
-        {
+        let preprocessed_reward_set =
+            SortitionDB::get_preprocessed_reward_set(&mut tx, &first_prepare_sn.sortition_id)?;
+
+        // It's possible that we haven't processed the PoX anchor block at the time we have
+        // processed the burnchain block which commits to it.  In this case, the PoX anchor block
+        // status would be SelectedAndUnknown.  However, it's overwhelmingly likely (and in
+        // Nakamoto, _required_) that the PoX anchor block will be processed shortly thereafter.
+        // When this happens, we need to _update_ the sortition DB with the newly-processed reward
+        // set.  This code performs this check to determine whether or not we need to store this
+        // calculated reward set.
+        let need_to_store = if let Some(reward_cycle_info) = preprocessed_reward_set {
+            // overwrite if we have an unknown anchor block
+            !reward_cycle_info.is_reward_info_known()
+        } else {
+            true
+        };
+        if need_to_store {
+            debug!(
+                "Store preprocessed reward set for cycle";
+                "reward_cycle" => prev_reward_cycle,
+                "prepare-start sortition" => %first_prepare_sn.sortition_id,
+                "reward_cycle_info" => format!("{:?}", &reward_cycle_info)
+            );
             SortitionDB::store_preprocessed_reward_set(
                 &mut tx,
                 &first_prepare_sn.sortition_id,
@@ -1603,6 +1625,7 @@ impl<
     /// block can be re-processed in that event.
     fn undo_stacks_block_orphaning(
         burnchain_conn: &DBConn,
+        burnchain_indexer: &B,
         ic: &SortitionDBConn,
         chainstate_db_tx: &mut DBTx,
         first_invalidate_start_block: u64,
@@ -1613,8 +1636,11 @@ impl<
             first_invalidate_start_block, last_invalidate_start_block
         );
         for burn_height in first_invalidate_start_block..(last_invalidate_start_block + 1) {
-            let burn_header = match BurnchainDB::get_burnchain_header(burnchain_conn, burn_height)?
-            {
+            let burn_header = match BurnchainDB::get_burnchain_header(
+                burnchain_conn,
+                burnchain_indexer,
+                burn_height,
+            )? {
                 Some(hdr) => hdr,
                 None => {
                     continue;
@@ -1840,6 +1866,7 @@ impl<
             // sortitions
             let revalidated_burn_header = BurnchainDB::get_burnchain_header(
                 self.burnchain_blocks_db.conn(),
+                &self.burnchain_indexer,
                 first_invalidate_start_block - 1,
             )
             .expect("FATAL: failed to read burnchain DB")
@@ -1854,6 +1881,7 @@ impl<
             // invalidate all descendant sortitions, no matter what.
             let invalidated_burn_header = BurnchainDB::get_burnchain_header(
                 self.burnchain_blocks_db.conn(),
+                &self.burnchain_indexer,
                 last_invalidate_start_block - 1,
             )
             .expect("FATAL: failed to read burnchain DB")
@@ -2045,6 +2073,7 @@ impl<
             // un-orphan blocks that had been orphaned but were tied to this now-revalidated sortition history
             Self::undo_stacks_block_orphaning(
                 &self.burnchain_blocks_db.conn(),
+                &self.burnchain_indexer,
                 &ic,
                 &mut chainstate_db_tx,
                 first_invalidate_start_block,
@@ -2407,6 +2436,8 @@ impl<
         return false;
     }
 
+    // TODO: add tests from mutation testing results #4852
+    #[cfg_attr(test, mutants::skip)]
     /// Handle a new burnchain block, optionally rolling back the canonical PoX sortition history
     /// and setting it up to be replayed in the event the network affirms a different history.  If
     /// this happens, *and* if re-processing the new affirmed history is *blocked on* the
@@ -3503,6 +3534,7 @@ impl SortitionDBMigrator {
             .pox_constants
             .reward_cycle_to_block_height(sort_db.first_block_height, reward_cycle)
             .saturating_sub(1);
+
         let sort_tip = SortitionDB::get_canonical_burn_chain_tip(sort_db.conn())?;
 
         let ancestor_sn = {
