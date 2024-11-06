@@ -61,7 +61,7 @@ jobs:
     steps:
       - name: Build Binary (${{ matrix.arch }}_${{ matrix.cpu }})
         if: |
-          ${{ inputs.cache_available != 'true' }}
+          ${{ inputs.cache_available }} != 'true'
         id: build_binary
         uses: stacks-network/actions/stacks-core/create-source-binary@feat/release-signer-alongside-node
         with:
@@ -71,7 +71,7 @@ jobs:
 
       - name: Extract Signer Binary (${{ matrix.arch }}_${{ matrix.cpu }})
         if: |
-          ${{ inputs.cache_available != 'true' }}
+          ${{ inputs.cache_available }} == 'true'
         id: compute_signer_binary
         uses: stacks-network/actions/stacks-core/extract-signer-binary@feat/release-signer-alongside-node
         with:
