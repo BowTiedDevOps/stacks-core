@@ -85,7 +85,7 @@ jobs:
   create-node-release:
     if: |
       needs.check-release.outputs.is_node_release == 'true'
-    name: Create Release
+    name: Create Node Release
     needs:
       - rustfmt
       - check-release
@@ -104,7 +104,7 @@ jobs:
   create-signer-release:
     if: |
       needs.check-release.outputs.is_signer_release == 'true'
-    name: Create Release
+    name: Create Signer Release
     needs:
       - rustfmt
       - check-release
