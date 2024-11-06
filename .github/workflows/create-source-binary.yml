@@ -9,6 +9,14 @@ on:
         description: "Tag name of this release (x.y.z)"
         required: true
         type: string
+      cache_available:
+        description: "Is a cache available"
+        required: true
+        type: string
+      cache_pattern:
+        description: "The artifact pattern of the cache"
+        required: false
+        type: string
 
 ## change the display name to the tag being built
 run-name: ${{ inputs.tag }}
@@ -52,9 +60,22 @@ jobs:
 
     steps:
       - name: Build Binary (${{ matrix.arch }}_${{ matrix.cpu }})
+        if: |
+          ${{ inputs.cache_available != 'true' }}
         id: build_binary
-        uses: stacks-network/actions/stacks-core/create-source-binary@main
+        uses: stacks-network/actions/stacks-core/create-source-binary@feat/release-signer-alongside-node
         with:
           arch: ${{ matrix.arch }}
           cpu: ${{ matrix.cpu }}
           tag: ${{ inputs.tag }}
+
+      - name: Extract Signer Binary (${{ matrix.arch }}_${{ matrix.cpu }})
+        if: |
+          ${{ inputs.cache_available != 'true' }}
+        id: compute_signer_binary
+        uses: stacks-network/actions/stacks-core/extract-signer-binary@feat/release-signer-alongside-node
+        with:
+          arch: ${{ matrix.arch }}
+          cpu: ${{ matrix.cpu }}
+          tag: ${{ inputs.tag }}
+          cache_pattern: ${{ inputs.cache_pattern }}

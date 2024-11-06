@@ -13,6 +13,14 @@ on:
         description: "Docker Release Tag"
         required: true
         type: string
+      cache_available:
+        description: "Is a cache available"
+        required: true
+        type: string
+      cache_pattern:
+        description: "The artifact pattern of the cache"
+        required: false
+        type: string
     secrets:
       GH_TOKEN:
         required: true
@@ -36,6 +44,8 @@ jobs:
     uses: ./.github/workflows/create-source-binary.yml
     with:
       tag: ${{ inputs.tag }}
+      cache_available: ${{ inputs.cache_available }}
+      cache_pattern: ${{ inputs.cache_pattern }}
     secrets: inherit
 
   ## Runs when the following is true:
