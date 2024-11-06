@@ -14,8 +14,8 @@ on:
         required: true
         type: string
       cache_available:
-        description: "Is a cache available"
-        required: true
+        description: "True if a cache is available"
+        required: false
         type: string
       cache_pattern:
         description: "The artifact pattern of the cache"
