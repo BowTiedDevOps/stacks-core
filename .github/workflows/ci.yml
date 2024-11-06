@@ -46,13 +46,19 @@ jobs:
     steps:
       - name: Rustfmt
         id: rustfmt
-        uses: stacks-network/actions/rustfmt@main
+        uses: BowTiedDevOps/actions/rustfmt@main
         with:
           alias: "fmt-stacks"
 
-  ######################################################################################
-  ## Check if the branch that this workflow is being run against is a release branch
+  ## Check if the head branch of the PR is a release branch
+  ##
+  ## Runs when the following is true:
+  ##  - The workflow was triggered by a `workflow_dispatch` action
   check-release:
+    if: |
+      (
+        github.event_name == 'workflow_dispatch'
+      )
     name: Check Release
     needs:
       - rustfmt
