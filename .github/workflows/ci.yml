@@ -107,6 +107,7 @@ jobs:
     needs:
       - rustfmt
       - check-release
+      - create-node-release
     uses: ./.github/workflows/github-release.yml
     with:
       tag: ${{ needs.check-release.outputs.signer_tag }}
