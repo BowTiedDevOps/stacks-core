@@ -33,6 +33,16 @@ concurrency:
 run-name: ${{ inputs.tag }}
 
 jobs:
+  print-inputs:
+    name: Print Inputs
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "tag: ${{ inputs.tag }}"
+          echo "docker_tag: ${{ inputs.docker_tag }}"
+          echo "cache_available: ${{ inputs.cache_available }}"
+          echo "cache_pattern: ${{ inputs.cache_pattern }}"
+
   ## Build arch dependent binaries from source
   ##
   ## Runs when the following is true:
