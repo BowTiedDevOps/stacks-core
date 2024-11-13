@@ -112,6 +112,11 @@ jobs:
     if: |
       inputs.node_tag != '' ||
       inputs.signer_tag != ''
+    name: Docker Image (Binary)
+    runs-on: 'ubuntu-latest'
+    needs:
+      - build-binaries
+      - create-release
     strategy:
       fail-fast: false
       ## Build a maximum of 2 images concurrently based on matrix.dist
@@ -120,16 +125,13 @@ jobs:
         dist:
           - alpine
           - debian
-    name: Docker Image (Binary)
-    uses: stacks-network/actions/stacks-core/release/create-docker-images@feat/release-signer-alongside-node
-    needs:
-      - build-binaries
-      - create-release
-    with:
-      node_tag: ${{ inputs.node_tag }}
-      node_docker_tag: ${{ inputs.node_docker_tag }}
-      signer_tag: ${{ inputs.signer_tag }}
-      signer_docker_tag: ${{ inputs.signer_docker_tag }}
-      is_node_release: ${{ inputs.is_node_release }}
-      is_signer_release: ${{ inputs.is_signer_release }}
-    secrets: inherit
+    steps:
+      - name: Create Docker Image
+        uses: stacks-network/actions/stacks-core/release/create-docker-images@feat/release-signer-alongside-node
+        with:
+          node_tag: ${{ inputs.node_tag }}
+          node_docker_tag: ${{ inputs.node_docker_tag }}
+          signer_tag: ${{ inputs.signer_tag }}
+          signer_docker_tag: ${{ inputs.signer_docker_tag }}
+          is_node_release: ${{ inputs.is_node_release }}
+          is_signer_release: ${{ inputs.is_signer_release }}
