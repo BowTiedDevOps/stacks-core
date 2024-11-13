@@ -27,7 +27,7 @@ jobs:
     steps:
       - name: Lock Threads
         id: lock_threads
-        uses: stacks-network/actions/lock-threads@main
+        uses: stacks-network/actions/lock-threads@feat/release-signer-alongside-node
         with:
           github-token: ${{ secrets.GH_TOKEN }}
           issue-inactive-days: 7
