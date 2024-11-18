@@ -81,7 +81,7 @@ jobs:
           arch: ${{ matrix.arch }}
           cpu: ${{ matrix.cpu }}
           node_tag: ${{ inputs.node_tag }}
-          signer_tag: ${{ inputs.signer_tag }}
+          signer_docker_tag: ${{ inputs.signer_docker_tag }}
           is_node_release: ${{ inputs.is_node_release }}
 
   ## Runs when the following is true:
