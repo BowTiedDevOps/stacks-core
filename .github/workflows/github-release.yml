@@ -140,3 +140,4 @@ jobs:
           is_signer_release: ${{ inputs.is_signer_release }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+          dist: ${{ matrix.dist }}
