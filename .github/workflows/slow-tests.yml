@@ -37,7 +37,7 @@ jobs:
       ## Setup test environment
       - name: Setup Test Environment
         id: setup_tests
-        uses: stacks-network/actions/stacks-core/testenv@main
+        uses: stacks-network/actions/stacks-core/testenv@chore/update-actions-versions
         with:
           btc-version: "25.0"
           
@@ -46,7 +46,7 @@ jobs:
       - name: Run Tests
         id: run_tests
         timeout-minutes: ${{ fromJSON(env.TEST_TIMEOUT) }}
-        uses: stacks-network/actions/stacks-core/run-tests@main
+        uses: stacks-network/actions/stacks-core/run-tests@chore/update-actions-versions
         with:
           test-name: ${{ matrix.test-name }}
           threads: 1
@@ -54,7 +54,7 @@ jobs:
       ## Create and upload code coverage file
       - name: Code Coverage
         id: codecov
-        uses: stacks-network/actions/codecov@main
+        uses: stacks-network/actions/codecov@chore/update-actions-versions
         with:
           test-name: ${{ matrix.test-name }}
 
@@ -67,7 +67,7 @@ jobs:
     steps:
       - name: Check Tests Status
         id: check_tests_status
-        uses: stacks-network/actions/check-jobs-status@main
+        uses: stacks-network/actions/check-jobs-status@chore/update-actions-versions
         with:
           jobs: ${{ toJson(needs) }}
           summary_print: "true"

@@ -32,7 +32,7 @@ jobs:
       ## Setup Docker for the builds
       - name: Docker setup
         id: docker_setup
-        uses: stacks-network/actions/docker@main
+        uses: stacks-network/actions/docker@chore/update-actions-versions
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
