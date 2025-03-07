@@ -12,12 +12,14 @@ on:
     branches:
       - master
 
+permissions:
+  pull-requests: write
+  contents: write
+
 jobs:
   docs-pr:
     name: Open Docs PR
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout the latest code
         id: git_checkout
