@@ -149,6 +149,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
+          ## authenticate to gh
+          echo "${GH_TOKEN}" | gh auth login --with-token
+
           ## enter docs working directory
           cd ${{ env.TARGET_REPOSITORY_PATH }}
 
