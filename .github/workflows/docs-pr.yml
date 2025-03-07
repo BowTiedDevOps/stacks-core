@@ -173,8 +173,9 @@ jobs:
           git checkout ${TARGET_BRANCH}
           git pull
 
-          ## Create and checkout the new source branch
+          ## Create and push the new source branch
           git checkout -b ${SOURCE_BRANCH}
+          git push --set-upstream origin ${SOURCE_BRANCH}
 
           PR_TITLE="Merge ${SOURCE_BRANCH} to ${TARGET_BRANCH}"
 
