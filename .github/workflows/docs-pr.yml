@@ -42,9 +42,9 @@ jobs:
             const fs = require('fs');
             const path = require('path');
 
-            const INPUT_FILE_PATH = path.join(${{ env.BUILD_DOCS_OUTPUT_PATH }}, 'clarity-reference.json');
-            const OUTPUT_FUNCTIONS_FILE_PATH = path.join(${{ env.TARGET_REPOSITORY_PATH }}, 'reference', 'functions.md');
-            const OUTPUT_KEYWORDS_FILE_PATH = path.join(${{ env.TARGET_REPOSITORY_PATH }}, 'reference', 'keywords.md');
+            const INPUT_FILE_PATH = path.join('${{ env.BUILD_DOCS_OUTPUT_PATH }}'', 'clarity-reference.json');
+            const OUTPUT_FUNCTIONS_FILE_PATH = path.join('${{ env.TARGET_REPOSITORY_PATH }}', 'reference', 'functions.md');
+            const OUTPUT_KEYWORDS_FILE_PATH = path.join('${{ env.TARGET_REPOSITORY_PATH }}', 'reference', 'keywords.md');
 
             const escapeSpecialChars = (str) => {
               return str.replace(/[*_#]/g, '\\$&');
