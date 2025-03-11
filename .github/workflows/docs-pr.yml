@@ -36,6 +36,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ${{ env.TARGET_REPOSITORY }}
+          ref: ${{ env.TARGET_REPOSITORY_BRANCH }}
           path: ${{ env.TARGET_REPOSITORY_PATH }}
           token: ${{ secrets.GH_TOKEN }}
 
@@ -173,11 +174,6 @@ jobs:
           EOF
           }
 
-          ## Ensure the repository is up to date
-          git fetch --all
-          git checkout ${TARGET_BRANCH}
-          git pull
-
           ## Create and push the new source branch
           git checkout -b ${SOURCE_BRANCH}
           git push --set-upstream origin ${SOURCE_BRANCH}
@@ -199,7 +195,7 @@ jobs:
           DIFF_NUM=$(sed -n '$=' ${DIFF_OUT})
 
           ## Finally, create the PR if at least 1 line has changed
-          if [ "${DIFF_NUM}" -gt 0 ]; then
+          if [[ "${DIFF_NUM}" -gt 0 ]]; then
             PR=$(
               gh pr create \
                 --head "${SOURCE_BRANCH}" \
