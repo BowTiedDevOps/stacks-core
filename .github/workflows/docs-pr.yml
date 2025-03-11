@@ -207,14 +207,14 @@ jobs:
                 --head "${SOURCE_BRANCH}" \
                 --base "${TARGET_BRANCH}" \
                 --title "${PR_TITLE}" \
-                --body "Release PR to Merge \`${SOURCE_BRANCH}\`->\`${TARGET_BRANCH}\`"
+                --body "Clarity ref PR to Merge \`${SOURCE_BRANCH}\` -> \`${TARGET_BRANCH}\`"
             )
             PR_NUM=$(basename "$PR") # parse the PR number from the url
-            MSG="PR [$PR_NUM]($PR) (\`${SOURCE_BRANCH}\`->\`${TARGET_BRANCH}\`) created" # output message to display
+            MSG="PR [$PR_NUM]($PR) (\`${SOURCE_BRANCH}\` -> \`${TARGET_BRANCH}\`) created" # output message to display
             message_out "${MSG}" # store message as annotation
           else
             ## if the diff does not contain at least 1 change, exit successfully with a message
-            MSG="No changes detected between \`${SOURCE_BRANCH}\`->\`${TARGET_BRANCH}\`" # output message to display
+            MSG="No changes detected between \`${SOURCE_BRANCH}\` -> \`${TARGET_BRANCH}\`" # output message to display
             message_out "${MSG}"  # store message as annotation
           fi
 
