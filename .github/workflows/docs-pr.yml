@@ -177,6 +177,7 @@ jobs:
 
           ## Create and push the new source branch
           git checkout -b ${SOURCE_BRANCH}
+          git add .
           git commit -m "chore: update clarity reference and functions - ${TIMESTAMP}"
           git push --set-upstream origin ${SOURCE_BRANCH}
 
