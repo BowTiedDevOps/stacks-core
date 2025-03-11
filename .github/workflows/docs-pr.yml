@@ -175,6 +175,9 @@ jobs:
           EOF
           }
 
+          git config user.email "runner@github-bot.com"
+          git config user.name "GitHub Runner"
+
           ## Create and push the new source branch
           git checkout -b ${SOURCE_BRANCH}
           git add .
