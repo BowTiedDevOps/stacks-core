@@ -37,6 +37,7 @@ jobs:
         with:
           repository: ${{ env.TARGET_REPOSITORY }}
           path: ${{ env.TARGET_REPOSITORY_PATH }}
+          token: ${{ secrets.GH_TOKEN }}
 
       - name: Generate Docs
         id: generate_docs
@@ -150,10 +151,9 @@ jobs:
 
       - name: Create PR
         id: create_pr
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          ## auth to gh
-          echo '${{ secrets.GH_TOKEN }}' | gh auth login --with-token
-
           ## enter docs working directory
           cd ${{ env.TARGET_REPOSITORY_PATH }}
 
