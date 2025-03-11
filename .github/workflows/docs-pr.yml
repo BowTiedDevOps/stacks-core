@@ -159,7 +159,8 @@ jobs:
           cd ${{ env.TARGET_REPOSITORY_PATH }}
 
           ## set some defaults
-          SOURCE_BRANCH="chore/update_clarity_ref_$(date +%s)"
+          TIMESTAMP=$(date +%s)
+          SOURCE_BRANCH="chore/update_clarity_ref_${TIMESTAMP}"
           TARGET_BRANCH=${{ env.TARGET_REPOSITORY_BRANCH }}
           COMMIT_HASH=$(git log -1 '--pretty=%H') # retrieve the branch commit hash (used to determine who to assign the PR to)
           EXIT_CODE=0 # set default exit code to 0
@@ -176,6 +177,7 @@ jobs:
 
           ## Create and push the new source branch
           git checkout -b ${SOURCE_BRANCH}
+          git commit -m "chore: update clarity reference and functions - ${TIMESTAMP}"
           git push --set-upstream origin ${SOURCE_BRANCH}
 
           PR_TITLE="Merge ${SOURCE_BRANCH} to ${TARGET_BRANCH}"
