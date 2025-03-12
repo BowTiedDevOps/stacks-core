@@ -1,0 +1,36 @@
+name: Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ci-${{ github.head_ref || github.ref || github.run_id }}
+  ## Always cancel duplicate jobs
+  cancel-in-progress: true
+
+run-name: ${{ github.ref_name }}
+
+jobs:
+  check-release:
+    name: Check Release
+    runs-on: ubuntu-latest
+    outputs:
+      node_tag: ${{ steps.check_release.outputs.node_tag }}
+      node_docker_tag: ${{ steps.check_release.outputs.node_docker_tag }}
+      signer_tag: ${{ steps.check_release.outputs.signer_tag }}
+      signer_docker_tag: ${{ steps.check_release.outputs.signer_docker_tag }}
+      is_node_release: ${{ steps.check_release.outputs.is_node_release }}
+      is_signer_release: ${{ steps.check_release.outputs.is_signer_release }}
+    steps:
+      - name: Check Release
+        id: check_release
+        uses: stacks-network/actions/stacks-core/release/check-release@feat/check-versions-file-on-release
+        with:
+          tag: ${{ github.ref_name }}
