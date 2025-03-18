@@ -40,9 +40,19 @@ jobs:
   ##   and any of:
   ##     - PR review comment
   ##     - PR change is requested
+  cargo-check:
+    name: Cargo Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cargo Check
+        id: cargo_check
+        uses: stacks-network/actions/stacks-core/cargo-check@feat/run-cargo-check-in-ci
+
   rustfmt:
     name: Rust Format
     runs-on: ubuntu-latest
+    needs:
+      - cargo-check
     steps:
       - name: Rustfmt
         id: rustfmt
