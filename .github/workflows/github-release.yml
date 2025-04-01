@@ -29,9 +29,6 @@ on:
         description: "True if it is a signer release"
         required: true
         type: string
-    secrets:
-      GH_TOKEN:
-        required: true
 
 concurrency:
   group: github-release-${{ github.head_ref || github.ref }}
