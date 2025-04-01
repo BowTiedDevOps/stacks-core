@@ -158,9 +158,11 @@ jobs:
       - build-binaries
       - create-release
       - docker-image
+    permissions:
+      contents: write
     steps:
       - name: Open Downstream PR
         id: create-pr
         uses: stacks-network/actions/stacks-core/release/downstream-pr@main
         with:
-          token: ${{ secrets.GH_TOKEN }}
+          token: ${{ github.TOKEN }}
