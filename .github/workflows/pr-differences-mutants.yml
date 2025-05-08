@@ -25,7 +25,7 @@ jobs:
     steps:
       - name: Check Access Permissions To Trigger This
         id: check_access_permissions
-        uses: stacks-network/actions/team-membership@main
+        uses: stacks-network/actions/team-membership@chore/update-actions-versions
         with:
           username: ${{ github.actor }}
           team: 'blockchain-team'
@@ -53,7 +53,7 @@ jobs:
 
     steps:
       - id: check_packages_and_shards
-        uses: stacks-network/actions/stacks-core/mutation-testing/check-packages-and-shards@main
+        uses: stacks-network/actions/stacks-core/mutation-testing/check-packages-and-shards@chore/update-actions-versions
         with:
           ignore_timeout: ${{ needs.check-access-permissions.outputs.ignore_timeout }}
 
@@ -71,7 +71,7 @@ jobs:
 
     steps:
       - name: Run mutants on diffs
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@chore/update-actions-versions
         with:
           package: 'small'
 
@@ -94,7 +94,7 @@ jobs:
 
     steps:
       - name: Run mutants on diffs
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@chore/update-actions-versions
         with:
           shard: ${{ matrix.shard }}
           package: 'small'
@@ -116,7 +116,7 @@ jobs:
         env:
           BITCOIND_TEST: 1
           RUST_BACKTRACE: full
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@chore/update-actions-versions
         with:
           package: 'stackslib'
 
@@ -142,7 +142,7 @@ jobs:
         env:
           BITCOIND_TEST: 1
           RUST_BACKTRACE: full
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@chore/update-actions-versions
         with:
           shard: ${{ matrix.shard }}
           package: 'stackslib'
@@ -164,7 +164,7 @@ jobs:
         env:
           BITCOIND_TEST: 1
           RUST_BACKTRACE: full
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@chore/update-actions-versions
         with:
           package: 'stacks-node'
 
@@ -190,7 +190,7 @@ jobs:
         env:
           BITCOIND_TEST: 1
           RUST_BACKTRACE: full
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@chore/update-actions-versions
         with:
           shard: ${{ matrix.shard }}
           package: 'stacks-node'
@@ -208,7 +208,7 @@ jobs:
 
     steps:
       - name: Run mutants on diffs
-        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@main
+        uses: stacks-network/actions/stacks-core/mutation-testing/pr-differences@chore/update-actions-versions
         with:
           package: 'stacks-signer'
 
@@ -233,7 +233,7 @@ jobs:
 
     steps:
       - name: Output Mutants
-        uses: stacks-network/actions/stacks-core/mutation-testing/output-pr-mutants@main
+        uses: stacks-network/actions/stacks-core/mutation-testing/output-pr-mutants@chore/update-actions-versions
         with:
           stackslib_package: ${{ needs.check-big-packages-and-shards.outputs.run_stackslib }}
           shards_for_stackslib_package: ${{ needs.check-big-packages-and-shards.outputs.stackslib_with_shards }}

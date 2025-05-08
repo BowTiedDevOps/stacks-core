@@ -35,7 +35,7 @@ jobs:
       ## Setup test environment
       - name: Setup Test Environment
         id: setup_tests
-        uses: stacks-network/actions/stacks-core/testenv@main
+        uses: stacks-network/actions/stacks-core/testenv@chore/update-actions-versions
         with:
           btc-version: "25.0"
 
@@ -44,7 +44,7 @@ jobs:
       - name: Run Tests
         id: run_tests
         timeout-minutes: ${{ fromJSON(env.TEST_TIMEOUT) }}
-        uses: stacks-network/actions/stacks-core/run-tests/partition@main
+        uses: stacks-network/actions/stacks-core/run-tests/partition@chore/update-actions-versions
         with:
           partition: ${{ matrix.partition }}
           total-partitions: 8
@@ -52,7 +52,7 @@ jobs:
       ## Create and upload code coverage file
       - name: Code Coverage
         id: codecov
-        uses: stacks-network/actions/codecov@main
+        uses: stacks-network/actions/codecov@chore/update-actions-versions
         with:
           test-name: ${{ matrix.test-name }}
 
@@ -63,7 +63,7 @@ jobs:
     steps:
       - name: OpenAPI
         id: openapi
-        uses: stacks-network/actions/openapi@main
+        uses: stacks-network/actions/openapi@chore/update-actions-versions
         with:
           input: ./docs/rpc/openapi.yaml
           output: ./open-api-docs.html
@@ -109,7 +109,7 @@ jobs:
       ## Upload code coverage file
       - name: Code Coverage
         id: codecov
-        uses: stacks-network/actions/codecov@main
+        uses: stacks-network/actions/codecov@chore/update-actions-versions
         with:
           # We'd like to uncomment the below line once the codecov upload is working
           # fail_ci_if_error: true
@@ -142,7 +142,7 @@ jobs:
     steps:
       - name: Check Tests Status
         id: check_tests_status
-        uses: stacks-network/actions/check-jobs-status@main
+        uses: stacks-network/actions/check-jobs-status@chore/update-actions-versions
         with:
           jobs: ${{ toJson(needs) }}
           summary_print: "true"
